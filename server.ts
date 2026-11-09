@@ -177,6 +177,7 @@ function mergeById<T extends { id: string }>(primary: T[], fallback: T[], delete
 
 async function startServer() {
   const app = express();
+  (globalThis as any).__expressApp = app;
 
   // Allow JSON request bodies (up to 50mb for image uploads)
   app.use(express.json({ limit: '50mb' }));
@@ -988,11 +989,19 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Full-Stack Server] CLB Đọc Sách is running at http://0.0.0.0:${PORT} (mode: ${isProd ? 'production' : 'development'})`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Full-Stack Server] running on port ${PORT}`);
+    });
+  }
 }
 
 startServer().catch((err) => {
-  console.error('[Server] Failed to start:', err);
+  console.error("[Server] Failed to start:", err);
 });
+
+export default (req: any, res: any) => {
+  const expressApp = (globalThis as any).__expressApp;
+  if (expressApp) return expressApp(req, res);
+  res.status(500).json({ error: "Server starting..." });
+};
