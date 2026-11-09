@@ -1,6 +1,6 @@
 // server.ts
 import express from "express";
-export let app = null;
+export const app = express();
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -931,7 +931,6 @@ function mergeById(primary, fallback, deletedIds = []) {
   return Array.from(map.values());
 }
 async function startServer() {
-  app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   app.use((req, res, next) => {
@@ -1623,6 +1622,7 @@ async function startServer() {
       console.log(`[Full-Stack Server] running on http://0.0.0.0:${PORT}`);
     });
   }
+}
 
 const serverReadyPromise = startServer();
 
