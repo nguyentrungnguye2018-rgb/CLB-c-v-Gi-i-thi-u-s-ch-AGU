@@ -1,0 +1,197 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == "nguyentrungnguye2018@gmail.com" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidDepartment(dept) {
+      return dept is string && dept.size() <= 64 && (
+        dept == 'Truyền thông' ||
+        dept == 'Nội dung' ||
+        dept == 'Nhân sự & Kế hoạch' ||
+        dept == 'Hậu cần' ||
+        dept == 'Ban Chủ Nhiệm'
+      );
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+        'uid',
+        'name',
+        'nickname',
+        'email',
+        'studentId',
+        'department',
+        'avatar',
+        'favoriteBook',
+        'readingStreak',
+        'meritPoints'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'name',
+        'nickname',
+        'email',
+        'studentId',
+        'department',
+        'avatar',
+        'favoriteBook',
+        'readingStreak',
+        'meritPoints'
+      ]) &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.uid == request.auth.uid &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      data.nickname is string && data.nickname.size() >= 1 && data.nickname.size() <= 80 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+      data.studentId is string && data.studentId.size() >= 2 && data.studentId.size() <= 32 &&
+      isValidDepartment(data.department) &&
+      data.avatar is string && data.avatar.size() >= 1 && data.avatar.size() <= 2048 &&
+      data.favoriteBook is string && data.favoriteBook.size() >= 1 && data.favoriteBook.size() <= 200 &&
+      data.readingStreak is int && data.readingStreak >= 0 && data.readingStreak <= 10000 &&
+      data.meritPoints is int && data.meritPoints >= 0 && data.meritPoints <= 1000000;
+    }
+
+    function isValidRecruitmentApplication(data) {
+      return data.keys().hasAll([
+        'authorUid',
+        'candidateName',
+        'studentId',
+        'faculty',
+        'preferredDept',
+        'favoriteBook',
+        'status'
+      ]) &&
+      data.keys().hasOnly([
+        'authorUid',
+        'candidateName',
+        'studentId',
+        'faculty',
+        'preferredDept',
+        'favoriteBook',
+        'status'
+      ]) &&
+      data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 && data.authorUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.candidateName is string && data.candidateName.size() >= 1 && data.candidateName.size() <= 120 &&
+      data.studentId is string && data.studentId.size() >= 2 && data.studentId.size() <= 32 &&
+      data.faculty is string && data.faculty.size() >= 1 && data.faculty.size() <= 120 &&
+      data.preferredDept is string && data.preferredDept.size() <= 64 && (
+        data.preferredDept == 'Truyền thông' ||
+        data.preferredDept == 'Nội dung' ||
+        data.preferredDept == 'Nhân sự & Kế hoạch' ||
+        data.preferredDept == 'Hậu cần'
+      ) &&
+      data.favoriteBook is string && data.favoriteBook.size() >= 1 && data.favoriteBook.size() <= 200 &&
+      data.status is string && data.status.size() <= 20 && (
+        data.status == 'pending' ||
+        data.status == 'accepted' ||
+        data.status == 'rejected'
+      );
+    }
+
+    // Admins registry (read-only from client; managed by bootstrapped admin)
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // Users collection (PII isolated to owner or admin)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().readingStreak == 0 &&
+        incoming().meritPoints == 0;
+
+      allow update: if isVerified() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email && (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'nickname',
+              'studentId',
+              'department',
+              'avatar',
+              'favoriteBook',
+              'readingStreak',
+              'meritPoints'
+            ])
+          )
+        );
+
+      allow delete: if isVerified() && isValidId(userId) && isAdmin();
+    }
+
+    // Recruitment applications collection
+    match /applications/{applicationId} {
+      allow get: if isSignedIn() && isValidId(applicationId) && (
+        existing().authorUid == request.auth.uid || isAdmin()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.authorUid == request.auth.uid || isAdmin()
+      );
+
+      allow create: if isVerified() &&
+        isValidId(applicationId) &&
+        isValidRecruitmentApplication(incoming()) &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().status == 'pending';
+
+      allow update: if isVerified() &&
+        isValidId(applicationId) &&
+        isValidRecruitmentApplication(incoming()) &&
+        incoming().authorUid == existing().authorUid &&
+        existing().status == 'pending' &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+
+      allow delete: if isVerified() && isValidId(applicationId) && isAdmin();
+    }
+  }
+}

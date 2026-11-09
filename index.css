@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --celadon-bg: #95B2A0;
+    --celadon-deep: #7B9B87;
+    --sand-paper: #FAF3E3;
+    --sand-card: #FFFDF7;
+    --sand-warm: #F2E5C9;
+    --woodblock-ink: #382215;
+    --terracotta-roof: #C8532B;
+    --terracotta-dark: #A63E1B;
+    --sunset-ochre: #E5A140;
+    --coastal-teal: #245351;
+    --palm-olive: #486A39;
+    --parchment-border: #D4C3A3;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: #95B2A0;
+    background-image: 
+      radial-gradient(rgba(56, 34, 21, 0.08) 0.75px, transparent 0.75px),
+      radial-gradient(rgba(242, 229, 201, 0.28) 0.75px, #95B2A0 0.75px);
+    background-size: 24px 24px;
+    background-position: 0 0, 12px 12px;
+    background-attachment: fixed;
+    color: #2B1D14;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-serif-vintage {
+    font-family: 'Lora', Georgia, serif;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    letter-spacing: -0.01em;
+  }
+
+  p, span, div {
+    overflow-wrap: break-word;
+  }
+
+  .font-reading {
+    font-family: 'Newsreader', Georgia, serif;
+  }
+}
+
+/* Literary Woodblock Title Effect inspired by "Ngữ Văn" Book Cover */
+.title-woodblock {
+  font-family: 'Lora', Georgia, serif;
+  color: #382215;
+  text-shadow: 2px 2px 0px #E5A140;
+}
+
+/* Tactile Poster Art Styling: Khối Cứng Mềm Mại (Solid borders + tactile offset box-shadow + generous rounded curves) */
+.glass-vintage {
+  background: #FAF3E3;
+  border: 2.5px solid #382215;
+  border-radius: 24px;
+  box-shadow: 5px 5px 0px #382215;
+}
+
+.glass-vintage-hover {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+.glass-vintage-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: 7px 7px 0px #382215;
+}
+
+/* Tactile Poster Button */
+.bubble-3d {
+  border: 2px solid #382215;
+  border-radius: 14px;
+  box-shadow: 3px 3px 0px #382215;
+  transition: transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bubble-3d:hover {
+  box-shadow: 4px 4px 0px #382215;
+  transform: translateY(-1px);
+}
+
+.bubble-3d:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px #382215;
+}
+
+/* Standalone Tactile Classes */
+.tactile-box {
+  background: #FAF3E3;
+  border: 2.5px solid #382215;
+  border-radius: 24px;
+  box-shadow: 5px 5px 0px #382215;
+}
+
+.tactile-subcard {
+  background: #FFFDF8;
+  border: 2px solid #382215;
+  border-radius: 18px;
+  box-shadow: 3px 3px 0px #382215;
+}
+
+/* Custom Scrollbar matching Retro Celadon & Sand */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #E8DEC8;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #7A9A87;
+  border-radius: 6px;
+  border: 2px solid #E8DEC8;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C8532B;
+}
+
+/* Floating animation for subtle hearts/bookmarks */
+@keyframes float-bubble {
+  0% { transform: translateY(0px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(-60px) rotate(10deg); opacity: 0; }
+}
+
+.animate-float-heart {
+  animation: float-bubble 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}

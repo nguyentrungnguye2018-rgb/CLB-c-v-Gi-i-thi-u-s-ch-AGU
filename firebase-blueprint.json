@@ -1,0 +1,169 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Member profile and reading streak record for AGU Book Club",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of the club member",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "nickname": {
+          "type": "string",
+          "description": "Display pen name or nickname",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of the member",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "studentId": {
+          "type": "string",
+          "description": "AGU student ID",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "department": {
+          "type": "string",
+          "description": "Club department name",
+          "enum": [
+            "Truyền thông",
+            "Nội dung",
+            "Nhân sự & Kế hoạch",
+            "Hậu cần",
+            "Ban Chủ Nhiệm"
+          ],
+          "maxLength": 64
+        },
+        "avatar": {
+          "type": "string",
+          "description": "Avatar URL",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "favoriteBook": {
+          "type": "string",
+          "description": "Favorite book title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "readingStreak": {
+          "type": "number",
+          "description": "Current reading streak in days"
+        },
+        "meritPoints": {
+          "type": "number",
+          "description": "Accumulated club merit points"
+        }
+      },
+      "required": [
+        "uid",
+        "name",
+        "nickname",
+        "email",
+        "studentId",
+        "department",
+        "avatar",
+        "favoriteBook",
+        "readingStreak",
+        "meritPoints"
+      ]
+    },
+    "RecruitmentApplication": {
+      "title": "RecruitmentApplication",
+      "description": "Candidate application form submission for AGU Book Club recruitment",
+      "type": "object",
+      "properties": {
+        "authorUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the applicant",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "candidateName": {
+          "type": "string",
+          "description": "Full name of the candidate",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "studentId": {
+          "type": "string",
+          "description": "AGU student ID of the candidate",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "faculty": {
+          "type": "string",
+          "description": "Academic faculty",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "preferredDept": {
+          "type": "string",
+          "description": "Preferred department to join",
+          "enum": [
+            "Truyền thông",
+            "Nội dung",
+            "Nhân sự & Kế hoạch",
+            "Hậu cần"
+          ],
+          "maxLength": 64
+        },
+        "favoriteBook": {
+          "type": "string",
+          "description": "Candidate favorite book",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "description": "Application review status",
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ],
+          "maxLength": 20
+        }
+      },
+      "required": [
+        "authorUid",
+        "candidateName",
+        "studentId",
+        "faculty",
+        "preferredDept",
+        "favoriteBook",
+        "status"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Stores authenticated AGU Book Club member profiles isolated by owner UID"
+    },
+    "/applications/{applicationId}": {
+      "schema": {
+        "$ref": "#/entities/RecruitmentApplication"
+      },
+      "description": "Stores candidate recruitment applications submitted by authenticated students"
+    }
+  }
+}
