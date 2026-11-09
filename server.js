@@ -1,5 +1,6 @@
 // server.ts
 import express from "express";
+export let app = null;
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -930,7 +931,7 @@ function mergeById(primary, fallback, deletedIds = []) {
   return Array.from(map.values());
 }
 async function startServer() {
-  const app = express();
+  app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   app.use((req, res, next) => {
@@ -1617,12 +1618,17 @@ async function startServer() {
     });
   }
   if (!process.env.VERCEL) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Full-Stack Server] running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-// Khởi chạy hàm nạp dữ liệu database ban đầu
-startServer().catch((err) => {
-  console.error("[Server] Failed to start:", err);
-});
+const serverReadyPromise = startServer();
 
-export default app;
-export { app };
+export { serverReadyPromise };
+export default async (req, res) => {
+  await serverReadyPromise;
+  return app(req, res);
+};
