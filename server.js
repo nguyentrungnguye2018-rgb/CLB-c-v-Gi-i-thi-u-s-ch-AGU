@@ -1623,7 +1623,6 @@ async function startServer() {
       console.log(`[Full-Stack Server] running on http://0.0.0.0:${PORT}`);
     });
   }
-}
 
 const serverReadyPromise = startServer();
 
