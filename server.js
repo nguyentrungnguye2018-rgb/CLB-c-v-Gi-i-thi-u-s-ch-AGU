@@ -1631,3 +1631,5 @@ export default async (req, res) => {
   await serverReadyPromise;
   return app(req, res);
 };
+export default (typeof app !== 'undefined' ? app : null);
+export { app };
