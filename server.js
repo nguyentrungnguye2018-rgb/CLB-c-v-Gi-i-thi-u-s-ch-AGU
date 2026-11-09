@@ -1616,10 +1616,15 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Full-Stack Server] CLB \u0110\u1ECDc S\xE1ch is running at http://0.0.0.0:${PORT} (mode: ${isProd ? "production" : "development"})`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Full-Stack Server] CLB is running at http://0.0.0.0:${PORT}`);
+    });
+  }
 }
+
 startServer().catch((err) => {
   console.error("[Server] Failed to start:", err);
 });
+
+export default app;
