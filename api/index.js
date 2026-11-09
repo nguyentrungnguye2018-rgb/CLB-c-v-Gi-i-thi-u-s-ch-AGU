@@ -1,14 +1,13 @@
-let app;
-try {
-  const mod = require('../server.js');
-  app = mod.default || mod;
-} catch (e) {
-  console.error("Failed to load server.js:", e);
-}
-
-module.exports = (req, res) => {
-  if (app) {
+module.exports = async (req, res) => {
+  try {
+    const mod = await import('../server.js');
+    const app = mod.default || mod;
     return app(req, res);
+  } catch (err) {
+    console.error("Lỗi khởi tạo server:", err);
+    return res.status(500).json({
+      error: "Không thể khởi động server",
+      details: err.message
+    });
   }
-  return res.status(500).json({ error: "Server module not initialized" });
 };
