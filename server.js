@@ -1623,8 +1623,10 @@ async function startServer() {
   }
 }
 
+// Khởi chạy hàm nạp dữ liệu database ban đầu
 startServer().catch((err) => {
   console.error("[Server] Failed to start:", err);
 });
 
 export default app;
+export { app };
