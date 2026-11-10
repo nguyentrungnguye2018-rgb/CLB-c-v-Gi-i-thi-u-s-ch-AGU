@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import admin from 'firebase-admin';
 import { SAMPLE_USERS, INITIAL_TERM_HISTORY, INITIAL_RECRUITMENT_QUESTIONS, S5T_CRITERIA_LIST } from './src/data/mockData';
 import {
   approveUserIntoDepartment,
@@ -16,16 +17,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'club_db.json');
-const SEED_FILE = path.join(DATA_DIR, 'seed.json');
+const FS_COLLECTION = 'club_database';
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// 1. Khởi tạo Firebase Admin SDK kết nối Firestore
+let firestore: FirebaseFirestore.Firestore | null = null;
+try {
+  if (!admin.apps.length) {
+    const serviceAccountEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (serviceAccountEnv) {
+      const serviceAccount = JSON.parse(serviceAccountEnv);
+      if (serviceAccount.private_key && typeof serviceAccount.private_key === 'string') {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      }
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      console.log('[Firebase] Admin SDK initialized successfully with Service Account.');
+    } else {
+      admin.initializeApp();
+      console.log('[Firebase] Admin SDK initialized with default credentials.');
+    }
+  }
+  firestore = admin.firestore();
+} catch (fbErr) {
+  console.error('[Firebase] Failed to initialize Firebase Admin:', fbErr);
 }
 
-// Global server in-memory state
+// Cấu trúc cơ sở dữ liệu CLB
 interface ClubDatabase {
   userList: any[];
   posts: any[];
@@ -82,83 +100,10 @@ function getInitialDatabase(): ClubDatabase {
 }
 
 let dbState: ClubDatabase = getInitialDatabase();
+let isDbInitialized = false;
+let dbInitPromise: Promise<void> | null = null;
 
-// Load persistent data from disk if exists
-try {
-  if (fs.existsSync(DB_FILE)) {
-    const raw = fs.readFileSync(DB_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed) {
-      const seed = getInitialDatabase();
-      const deletedUsers = Array.from(new Set([...(parsed.deletedUserIds || []), ...LEGACY_MOCK_USER_IDS]));
-      const deletedItems = parsed.deletedItemIds || [];
-      const mergedUsers = mergeById(
-        parsed.userList || [],
-        SAMPLE_USERS,
-        deletedUsers
-      );
-      const loadedQuestions = Array.isArray(parsed.questions) && parsed.questions.length > 0
-        ? parsed.questions
-        : INITIAL_RECRUITMENT_QUESTIONS;
-      const loadedCriteria = S5T_CRITERIA_LIST.map((official) => {
-        const existing = (parsed.criteria || []).find((c: any) => c && c.id === official.id);
-        if (!existing) return official;
-        return {
-          ...official,
-          completedCount: existing.completedCount ?? official.completedCount,
-          status: existing.status ?? official.status
-        };
-      });
-      dbState = {
-        ...seed,
-        ...parsed,
-        userList: mergedUsers,
-        criteria: loadedCriteria,
-        questions: loadedQuestions,
-        plans: (parsed.plans || []).filter((p: any) => p && !deletedItems.includes(p.id)),
-        memberEvaluations: (parsed.memberEvaluations || []).filter((e: any) => e && !deletedItems.includes(e.id)),
-        deletedUserIds: deletedUsers,
-        deletedItemIds: deletedItems,
-        cleanLaunchVersion: 4,
-        lastUpdated: parsed.lastUpdated || Date.now()
-      };
-      console.log('[Database] Loaded persistent database from disk:', DB_FILE);
-    }
-  } else {
-    const content = JSON.stringify(dbState, null, 2);
-    fs.writeFileSync(DB_FILE, content, 'utf-8');
-    try {
-      fs.writeFileSync(SEED_FILE, content, 'utf-8');
-    } catch {
-      // ignore
-    }
-    console.log('[Database] Initialized new clean database file:', DB_FILE);
-  }
-} catch (err) {
-  console.error('[Database] Error loading db file, using clean defaults:', err);
-}
-
-// Helper to save state to disk (both DB_FILE and SEED_FILE to guarantee survival across updates)
-let saveTimeout: NodeJS.Timeout | null = null;
-function persistDb() {
-  if (saveTimeout) clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    try {
-      dbState.lastUpdated = Date.now();
-      const content = JSON.stringify(dbState, null, 2);
-      fs.writeFileSync(DB_FILE, content, 'utf-8');
-      try {
-        fs.writeFileSync(SEED_FILE, content, 'utf-8');
-      } catch (seedErr) {
-        // Ignore if SEED_FILE is read-only
-      }
-    } catch (err) {
-      console.error('[Database] Failed to write db to disk:', err);
-    }
-  }, 100);
-}
-
-// Helper to safely merge arrays by ID (never drops existing items unless in deletedIds)
+// Hàm an toàn gộp danh sách theo ID
 function mergeById<T extends { id: string }>(primary: T[], fallback: T[], deletedIds: string[] = []): T[] {
   const deletedSet = new Set(deletedIds || []);
   const map = new Map<string, T>();
@@ -175,15 +120,165 @@ function mergeById<T extends { id: string }>(primary: T[], fallback: T[], delete
   return Array.from(map.values());
 }
 
+// 2. Tải dữ liệu từ Firestore vào bộ nhớ server
+async function loadDatabase(): Promise<void> {
+  if (!firestore) {
+    console.warn('[Database] Firestore offline, running in-memory mock mode.');
+    return;
+  }
+  try {
+    const colRef = firestore.collection(FS_COLLECTION);
+    const [usersDoc, contentDoc, opsDoc, govDoc, sysDoc] = await Promise.all([
+      colRef.doc('users').get(),
+      colRef.doc('content').get(),
+      colRef.doc('operations').get(),
+      colRef.doc('governance').get(),
+      colRef.doc('system').get(),
+    ]);
+
+    if (!usersDoc.exists && !contentDoc.exists && !sysDoc.exists) {
+      console.log('[Database] Firestore clean setup detected. Seeding initial club data...');
+      await persistAllToFirestore();
+      return;
+    }
+
+    const uData = usersDoc.data() || {};
+    const cData = contentDoc.data() || {};
+    const oData = opsDoc.data() || {};
+    const gData = govDoc.data() || {};
+    const sData = sysDoc.data() || {};
+
+    const deletedUsers = Array.from(new Set([...(uData.deletedUserIds || []), ...LEGACY_MOCK_USER_IDS]));
+    const deletedItems = sData.deletedItemIds || [];
+
+    const mergedUsers = mergeById(uData.userList || [], SAMPLE_USERS, deletedUsers);
+    const loadedQuestions = Array.isArray(sData.questions) && sData.questions.length > 0
+      ? sData.questions
+      : INITIAL_RECRUITMENT_QUESTIONS;
+
+    const loadedCriteria = S5T_CRITERIA_LIST.map((official) => {
+      const existing = (sData.criteria || []).find((c: any) => c && c.id === official.id);
+      if (!existing) return official;
+      return {
+        ...official,
+        completedCount: existing.completedCount ?? official.completedCount,
+        status: existing.status ?? official.status
+      };
+    });
+
+    dbState = {
+      ...getInitialDatabase(),
+      userList: mergedUsers,
+      posts: cData.posts || [],
+      locketMoments: cData.locketMoments || [],
+      proofs: cData.proofs || [],
+      criteria: loadedCriteria,
+      reports: oData.reports || [],
+      transactions: oData.transactions || [],
+      plans: (oData.plans || []).filter((p: any) => p && !deletedItems.includes(p.id)),
+      tasks: oData.tasks || [],
+      decrees: gData.decrees || [],
+      questions: loadedQuestions,
+      applications: oData.applications || [],
+      hallOfFame: gData.hallOfFame || [],
+      memberEvaluations: (gData.memberEvaluations || []).filter((e: any) => e && !deletedItems.includes(e.id)),
+      termHistory: gData.termHistory && gData.termHistory.length > 0 ? gData.termHistory : INITIAL_TERM_HISTORY,
+      emergencyNotices: gData.emergencyNotices || [],
+      annualTheme: gData.annualTheme || null,
+      deletedUserIds: deletedUsers,
+      deletedItemIds: deletedItems,
+      cleanLaunchVersion: 4,
+      lastUpdated: sData.lastUpdated || Date.now()
+    };
+    console.log('[Database] Synchronized state successfully from Firestore.');
+  } catch (err) {
+    console.error('[Database] Error synchronizing from Firestore:', err);
+  }
+}
+
+// 3. Lưu trữ trực tiếp lên Firestore theo từng phân vùng
+async function persistDb(section: 'users' | 'content' | 'operations' | 'governance' | 'system' | 'all' = 'all'): Promise<void> {
+  dbState.lastUpdated = Date.now();
+  if (!firestore) return;
+
+  try {
+    const colRef = firestore.collection(FS_COLLECTION);
+    const tasks: Promise<any>[] = [];
+
+    if (section === 'users' || section === 'all') {
+      tasks.push(colRef.doc('users').set({
+        userList: dbState.userList || [],
+        deletedUserIds: dbState.deletedUserIds || []
+      }, { merge: true }));
+    }
+
+    if (section === 'content' || section === 'all') {
+      tasks.push(colRef.doc('content').set({
+        posts: dbState.posts || [],
+        locketMoments: dbState.locketMoments || [],
+        proofs: dbState.proofs || []
+      }, { merge: true }));
+    }
+
+    if (section === 'operations' || section === 'all') {
+      tasks.push(colRef.doc('operations').set({
+        reports: dbState.reports || [],
+        transactions: dbState.transactions || [],
+        plans: dbState.plans || [],
+        tasks: dbState.tasks || [],
+        applications: dbState.applications || []
+      }, { merge: true }));
+    }
+
+    if (section === 'governance' || section === 'all') {
+      tasks.push(colRef.doc('governance').set({
+        decrees: dbState.decrees || [],
+        hallOfFame: dbState.hallOfFame || [],
+        memberEvaluations: dbState.memberEvaluations || [],
+        termHistory: dbState.termHistory || [],
+        emergencyNotices: dbState.emergencyNotices || [],
+        annualTheme: dbState.annualTheme || null
+      }, { merge: true }));
+    }
+
+    if (section === 'system' || section === 'all') {
+      tasks.push(colRef.doc('system').set({
+        criteria: dbState.criteria || [],
+        questions: dbState.questions || [],
+        deletedItemIds: dbState.deletedItemIds || [],
+        cleanLaunchVersion: dbState.cleanLaunchVersion || 4,
+        lastUpdated: dbState.lastUpdated
+      }, { merge: true }));
+    }
+
+    await Promise.all(tasks);
+  } catch (err) {
+    console.error(`[Database] Error persisting section ${section} to Firestore:`, err);
+  }
+}
+
+async function persistAllToFirestore(): Promise<void> {
+  await persistDb('all');
+}
+
+async function ensureDbLoaded(): Promise<void> {
+  if (isDbInitialized) return;
+  if (!dbInitPromise) {
+    dbInitPromise = (async () => {
+      await loadDatabase();
+      isDbInitialized = true;
+    })();
+  }
+  await dbInitPromise;
+}
+
 async function startServer() {
   const app = express();
   (globalThis as any).__expressApp = app;
 
-  // Allow JSON request bodies (up to 50mb for image uploads)
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-  // CORS headers so any client / iframe can sync smoothly
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -195,6 +290,12 @@ async function startServer() {
     next();
   });
 
+  // Middleware bảo đảm dữ liệu Firestore đã sẵn sàng trước khi xử lý request
+  app.use(async (req, res, next) => {
+    await ensureDbLoaded();
+    next();
+  });
+
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({
@@ -202,7 +303,8 @@ async function startServer() {
       connectedClients: 'multi-device',
       lastUpdated: dbState.lastUpdated,
       totalUsers: dbState.userList.length,
-      serverTime: Date.now()
+      serverTime: Date.now(),
+      storage: 'Firebase Firestore'
     });
   });
 
@@ -211,8 +313,8 @@ async function startServer() {
     res.json(dbState);
   });
 
-  // POST sync key: safely merges collections so no device ever overwrites another device's new accounts or posts
-  app.post('/api/sync', (req, res) => {
+  // POST sync key
+  app.post('/api/sync', async (req, res) => {
     const { key, data } = req.body;
     if (!key || data === undefined) {
       res.status(400).json({ error: 'Missing key or data' });
@@ -228,16 +330,15 @@ async function startServer() {
       } else {
         (dbState as any)[key] = data;
       }
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('all');
       res.json({ success: true, key, lastUpdated: dbState.lastUpdated, state: dbState });
     } else {
       res.status(400).json({ error: `Invalid key: ${key}` });
     }
   });
 
-  // POST batch sync: updates multiple keys at once with safe merge
-  app.post('/api/sync-batch', (req, res) => {
+  // POST batch sync
+  app.post('/api/sync-batch', async (req, res) => {
     const { updates } = req.body;
     if (!updates || typeof updates !== 'object') {
       res.status(400).json({ error: 'Invalid updates object' });
@@ -254,33 +355,29 @@ async function startServer() {
         }
       }
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Direct endpoint to post a confidential report (Tố cáo / phản ánh)
-  app.post('/api/reports', (req, res) => {
+  // Reports
+  app.post('/api/reports', async (req, res) => {
     const report = req.body;
     if (!report || !report.id || !report.title) {
       res.status(400).json({ error: 'Invalid report payload' });
       return;
     }
 
-    // Check if report exists, update or unshift
     const index = dbState.reports.findIndex((r: any) => r.id === report.id);
     if (index >= 0) {
       dbState.reports[index] = report;
     } else {
       dbState.reports.unshift(report);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('operations');
     res.json({ success: true, reports: dbState.reports, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Endpoint for BCN to respond to a report
-  app.post('/api/reports/response', (req, res) => {
+  app.post('/api/reports/response', async (req, res) => {
     const { reportId, response } = req.body;
     if (!reportId || !response) {
       res.status(400).json({ error: 'Missing reportId or response' });
@@ -293,16 +390,15 @@ async function startServer() {
         bcnResponse: response,
         status: 'resolved'
       };
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('operations');
       res.json({ success: true, reports: dbState.reports, lastUpdated: dbState.lastUpdated, state: dbState });
     } else {
       res.status(404).json({ error: 'Report not found' });
     }
   });
 
-  // Direct endpoint to post a status post / tản văn / E-News
-  app.post('/api/posts', (req, res) => {
+  // Posts
+  app.post('/api/posts', async (req, res) => {
     const post = req.body;
     if (!post || !post.id || !post.title) {
       res.status(400).json({ error: 'Invalid post payload' });
@@ -315,14 +411,12 @@ async function startServer() {
     } else {
       dbState.posts.unshift(post);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('content');
     res.json({ success: true, posts: dbState.posts, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Toggle like on a post
-  app.post('/api/posts/like', (req, res) => {
-    const { postId, userId } = req.body;
+  app.post('/api/posts/like', async (req, res) => {
+    const { postId } = req.body;
     if (!postId) {
       res.status(400).json({ error: 'Missing postId' });
       return;
@@ -336,16 +430,14 @@ async function startServer() {
         userLiked: nextLiked,
         likes: nextLiked ? (p.likes || 0) + 1 : Math.max(0, (p.likes || 1) - 1)
       };
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('content');
       res.json({ success: true, post: dbState.posts[index], lastUpdated: dbState.lastUpdated, state: dbState });
     } else {
       res.status(404).json({ error: 'Post not found' });
     }
   });
 
-  // Add comment to a post
-  app.post('/api/posts/comment', (req, res) => {
+  app.post('/api/posts/comment', async (req, res) => {
     const { postId, comment } = req.body;
     if (!postId || !comment || !comment.text) {
       res.status(400).json({ error: 'Missing postId or comment' });
@@ -361,16 +453,15 @@ async function startServer() {
         commentsList: updatedComments,
         commentsCount: updatedComments.length
       };
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('content');
       res.json({ success: true, post: dbState.posts[index], lastUpdated: dbState.lastUpdated, state: dbState });
     } else {
       res.status(404).json({ error: 'Post not found' });
     }
   });
 
-  // Direct endpoint to post a Locket memory
-  app.post('/api/lockets', (req, res) => {
+  // Lockets
+  app.post('/api/lockets', async (req, res) => {
     const moment = req.body;
     if (!moment || !moment.id) {
       res.status(400).json({ error: 'Invalid locket payload' });
@@ -383,13 +474,11 @@ async function startServer() {
     } else {
       dbState.locketMoments.unshift(moment);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('content');
     res.json({ success: true, locketMoments: dbState.locketMoments, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // React to locket moment
-  app.post('/api/lockets/react', (req, res) => {
+  app.post('/api/lockets/react', async (req, res) => {
     const { locketId } = req.body;
     if (!locketId) {
       res.status(400).json({ error: 'Missing locketId' });
@@ -404,15 +493,14 @@ async function startServer() {
         userReacted: nextReact,
         reactions: nextReact ? (m.reactions || 0) + 1 : Math.max(0, (m.reactions || 1) - 1)
       };
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('content');
       res.json({ success: true, locket: dbState.locketMoments[index], lastUpdated: dbState.lastUpdated, state: dbState });
     } else {
       res.status(404).json({ error: 'Locket moment not found' });
     }
   });
 
-  // POST Login authentication with password (matches MSSV, Email, or Full Name)
+  // Login
   app.post('/api/login', (req, res) => {
     const { identifier, password } = req.body;
     if (!identifier || !password) {
@@ -446,25 +534,22 @@ async function startServer() {
     });
   });
 
-  // POST direct register member with password & permanent persistence
-  app.post('/api/register', (req, res) => {
+  // Register
+  app.post('/api/register', async (req, res) => {
     const newUser = req.body;
     if (!newUser || !newUser.name || !newUser.studentId) {
       res.status(400).json({ error: 'Thiếu thông tin bắt buộc (Họ tên, MSSV)' });
       return;
     }
 
-    // Default password if not provided
     if (!newUser.password) {
       newUser.password = '123456';
     }
 
-    // If re-registering, remove from deletedUserIds
     if (dbState.deletedUserIds && newUser.id) {
       dbState.deletedUserIds = dbState.deletedUserIds.filter(id => id !== newUser.id);
     }
 
-    // Check if user already exists by id, studentId, or email
     const existingIndex = dbState.userList.findIndex(u => 
       (newUser.id && u.id === newUser.id) ||
       (u.studentId && newUser.studentId && u.studentId.toLowerCase() === newUser.studentId.toLowerCase()) ||
@@ -478,13 +563,12 @@ async function startServer() {
     } else {
       dbState.userList.unshift(newUser);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     res.json({ success: true, user: savedUser, totalUsers: dbState.userList.length, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST ensure local accounts exist on server (Auto-Recovery so no user account is ever lost)
-  app.post('/api/users/ensure-batch', (req, res) => {
+  // Ensure Batch Users
+  app.post('/api/users/ensure-batch', async (req, res) => {
     const { users } = req.body;
     if (!Array.isArray(users)) {
       res.status(400).json({ error: 'Invalid users array' });
@@ -508,15 +592,14 @@ async function startServer() {
     }
 
     if (changed) {
-      dbState.lastUpdated = Date.now();
-      persistDb();
+      await persistDb('users');
     }
 
     res.json({ success: true, changed, state: dbState, lastUpdated: dbState.lastUpdated });
   });
 
-  // POST update member profile (Avatar, Nickname, Favorite Book, Password, Streak, Points)
-  app.post('/api/users/update-profile', (req, res) => {
+  // Update Profile
+  app.post('/api/users/update-profile', async (req, res) => {
     const { userId, avatar, nickname, favoriteBook, newPassword, readingStreak, enewsStreak, hasCheckedInToday, lastCheckInDate, s5tProgress, meritPoints } = req.body;
     if (!userId) {
       res.status(400).json({ error: 'Missing userId' });
@@ -541,13 +624,12 @@ async function startServer() {
       s5tProgress: s5tProgress !== undefined ? s5tProgress : current.s5tProgress,
       meritPoints: meritPoints !== undefined ? meritPoints : current.meritPoints
     };
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     res.json({ success: true, user: dbState.userList[idx], lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Assign / Appoint single member role in 4-Department (prevents duplicate Trưởng Ban)
-  app.post('/api/users/assign-role', (req, res) => {
+  // Governance roles
+  app.post('/api/users/assign-role', async (req, res) => {
     const { targetUserId, department, roleTitle, departmentRole, roleType } = req.body;
     if (!targetUserId) {
       res.status(400).json({ error: 'Missing targetUserId' });
@@ -570,14 +652,12 @@ async function startServer() {
       roleTitle: roleTitle || target.position,
       roleType: roleType || target.role
     });
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     const updatedUser = dbState.userList.find((u: any) => u.id === targetUserId);
     res.json({ success: true, user: updatedUser, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Approve or Reject Member into a Department (Exclusive to Account Chính bcn-root)
-  app.post('/api/users/approve-department', (req, res) => {
+  app.post('/api/users/approve-department', async (req, res) => {
     const { targetUserId, department, status, note } = req.body;
     if (!targetUserId) {
       res.status(400).json({ error: 'Thiếu targetUserId' });
@@ -594,13 +674,11 @@ async function startServer() {
         new Date().toLocaleDateString('vi-VN')
       );
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     res.json({ success: true, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Select Trưởng Ban & Phó Ban for one of the 4 sub-departments (By Trưởng CLB or Account Chính)
-  app.post('/api/departments/appoint-leaders', (req, res) => {
+  app.post('/api/departments/appoint-leaders', async (req, res) => {
     const { department, leaderId, viceLeaderIds, appointedByName } = req.body;
     const result = appointSubDepartmentLeaders(dbState.userList, {
       department,
@@ -613,13 +691,11 @@ async function startServer() {
       return;
     }
     dbState.userList = result.updatedUsers;
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     res.json({ success: true, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Appoint Term-based Trưởng CLB & Phó CLB (Exclusive to Account Chính bcn-root)
-  app.post('/api/terms/appoint-bcn', (req, res) => {
+  app.post('/api/terms/appoint-bcn', async (req, res) => {
     const { termName, termYears, presidentId, vicePresidentIds, vicePositions, legacyContributions, legacyQuote } = req.body;
     const result = appointClubTermLeaders(
       dbState.userList,
@@ -643,13 +719,12 @@ async function startServer() {
     dbState.userList = result.updatedUsers;
     dbState.hallOfFame = result.updatedHallOfFame;
     dbState.termHistory = result.updatedTermHistory;
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Add transaction with receipt image support
-  app.post('/api/transactions', (req, res) => {
+  // Transactions & Plans
+  app.post('/api/transactions', async (req, res) => {
     const transaction = req.body;
     if (!transaction || !transaction.id || !transaction.title) {
       res.status(400).json({ error: 'Invalid transaction payload' });
@@ -659,13 +734,11 @@ async function startServer() {
       dbState.deletedItemIds = dbState.deletedItemIds.filter(id => id !== transaction.id);
     }
     dbState.transactions.unshift(transaction);
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('operations');
     res.json({ success: true, transactions: dbState.transactions, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Add or update plan (including archived plans with PDF/Image attachments)
-  app.post('/api/plans', (req, res) => {
+  app.post('/api/plans', async (req, res) => {
     const plan = req.body;
     if (!plan || !plan.id || !plan.title) {
       res.status(400).json({ error: 'Invalid plan payload' });
@@ -680,13 +753,12 @@ async function startServer() {
     } else {
       dbState.plans.unshift(plan);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('operations');
     res.json({ success: true, plans: dbState.plans, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Delete any item (plan, task, post, locketMoment, proof, report, transaction, decree, hallOfFame) permanently across all devices
-  app.post('/api/items/delete', (req, res) => {
+  // Delete item
+  app.post('/api/items/delete', async (req, res) => {
     const { key, itemId } = req.body;
     if (!key || !itemId || !(key in dbState)) {
       res.status(400).json({ error: 'Missing or invalid key / itemId' });
@@ -701,13 +773,12 @@ async function startServer() {
       dbState.deletedItemIds.push(itemId);
     }
     (dbState as any)[key] = (dbState as any)[key].filter((item: any) => item && item.id !== itemId);
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, key, deletedItemId: itemId, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Update Official Annual Theme (Chủ đề năm do Chủ nhiệm & Phó Chủ nhiệm đặt)
-  app.post('/api/theme', (req, res) => {
+  // Theme & Notices
+  app.post('/api/theme', async (req, res) => {
     const { theme, year, setBy, setAt } = req.body;
     if (!theme || !year) {
       res.status(400).json({ error: 'Missing theme or year' });
@@ -719,13 +790,11 @@ async function startServer() {
       setBy: setBy || 'Chủ nhiệm CLB',
       setAt: setAt || new Date().toLocaleDateString('vi-VN')
     };
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('governance');
     res.json({ success: true, annualTheme: dbState.annualTheme, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Add Emergency Notice
-  app.post('/api/emergency-notices', (req, res) => {
+  app.post('/api/emergency-notices', async (req, res) => {
     const notice = req.body;
     if (!notice || !notice.title) {
       res.status(400).json({ error: 'Missing notice title' });
@@ -741,30 +810,25 @@ async function startServer() {
       dbState.emergencyNotices = [];
     }
     dbState.emergencyNotices.unshift(newNotice);
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('governance');
     res.json({ success: true, emergencyNotices: dbState.emergencyNotices, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Dismiss / Deactivate Emergency Notice (Người phát hoặc BCN gỡ bỏ)
-  app.post('/api/emergency-notices/dismiss', (req, res) => {
+  app.post('/api/emergency-notices/dismiss', async (req, res) => {
     const { noticeId } = req.body;
     if (!noticeId) {
       res.status(400).json({ error: 'Missing noticeId' });
       return;
     }
     if (Array.isArray(dbState.emergencyNotices)) {
-      dbState.emergencyNotices = dbState.emergencyNotices.map((n: any) =>
-        n.id === noticeId ? { ...n, isActive: false } : n
-      ).filter((n: any) => n.id !== noticeId); // Gỡ bỏ hoàn toàn khỏi thanh khẩn cấp
+      dbState.emergencyNotices = dbState.emergencyNotices.filter((n: any) => n.id !== noticeId);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('governance');
     res.json({ success: true, noticeId, emergencyNotices: dbState.emergencyNotices, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // POST Admin Delete Account
-  app.post('/api/users/delete', (req, res) => {
+  // Delete user
+  app.post('/api/users/delete', async (req, res) => {
     const { userId } = req.body;
     if (!userId) {
       res.status(400).json({ error: 'Missing userId' });
@@ -777,35 +841,29 @@ async function startServer() {
       return;
     }
 
-    // Protect permanent root account
     if (targetUser.id === 'bcn-root' || targetUser.adminType === 'master_root') {
       res.status(403).json({ error: 'Không thể xóa Tài khoản Gốc Vĩnh Viễn của CLB!' });
       return;
     }
 
-    // Track deleted user ID so stale clients do not re-insert it
     if (!dbState.deletedUserIds) dbState.deletedUserIds = [];
     if (!dbState.deletedUserIds.includes(userId)) {
       dbState.deletedUserIds.push(userId);
     }
 
-    // Remove user
     dbState.userList = dbState.userList.filter((u: any) => u.id !== userId);
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('users');
     res.json({ success: true, deletedUserId: userId, userList: dbState.userList, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Succession Transfer endpoint
-  app.post('/api/succession', (req, res) => {
+  // Succession
+  app.post('/api/succession', async (req, res) => {
     const { outgoingLeaderId, incomingMemberId, newLeader, hallOfFameRecord, positionTitle } = req.body;
 
-    // 1. Add Hall of Fame record
     if (hallOfFameRecord) {
       dbState.hallOfFame.unshift(hallOfFameRecord);
     }
 
-    // 2. Outgoing leader becomes emeritus
     if (outgoingLeaderId) {
       const outIdx = dbState.userList.findIndex(u => u.id === outgoingLeaderId);
       if (outIdx >= 0) {
@@ -827,7 +885,6 @@ async function startServer() {
       }
     }
 
-    // 3. New leader or elevated incoming member
     if (newLeader) {
       dbState.userList.unshift(newLeader);
     } else if (incomingMemberId) {
@@ -849,20 +906,18 @@ async function startServer() {
       }
     }
 
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, state: dbState, lastUpdated: dbState.lastUpdated });
   });
 
-  // Download complete JSON backup
+  // Backup & Restore
   app.get('/api/backup/download', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename=agu_club_backup_${Date.now()}.json`);
     res.send(JSON.stringify(dbState, null, 2));
   });
 
-  // Restore database from JSON backup file
-  app.post('/api/backup/restore', (req, res) => {
+  app.post('/api/backup/restore', async (req, res) => {
     const { backupData, passcode } = req.body;
     if (passcode !== 'AGU2026') {
       res.status(403).json({ error: 'Mã xác thực bảo mật câu lạc bộ không chính xác!' });
@@ -878,12 +933,12 @@ async function startServer() {
       ...backupData,
       lastUpdated: Date.now()
     };
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, message: 'Đã phục hồi cơ sở dữ liệu thành công!', state: dbState, lastUpdated: dbState.lastUpdated });
   });
 
-  // Direct endpoint to submit a recruitment application (works both logged-in and via public recruitment link)
-  app.post('/api/applications', (req, res) => {
+  // Applications
+  app.post('/api/applications', async (req, res) => {
     const appData = req.body;
     if (!appData || !appData.fullName || !appData.studentId) {
       res.status(400).json({ error: 'Vui lòng nhập đầy đủ Họ tên và Mã số sinh viên!' });
@@ -904,12 +959,11 @@ async function startServer() {
     } else {
       dbState.applications.unshift(newApp);
     }
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('operations');
     res.json({ success: true, application: newApp, applications: dbState.applications, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Google Search Grounding endpoint for Book & Author lookup (gemini-3.8-flash with googleSearch tool)
+  // Gemini Search Grounding
   app.post('/api/books/search-grounding', async (req, res) => {
     const { query } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
@@ -951,8 +1005,8 @@ async function startServer() {
     }
   });
 
-  // Reset database back to default seed (BCN master only)
-  app.post('/api/reset-db', (req, res) => {
+  // Reset database
+  app.post('/api/reset-db', async (req, res) => {
     const { passcode } = req.body;
     if (passcode !== 'AGU2026') {
       res.status(403).json({ error: 'Invalid master passcode' });
@@ -960,12 +1014,11 @@ async function startServer() {
     }
 
     dbState = getInitialDatabase();
-    dbState.lastUpdated = Date.now();
-    persistDb();
+    await persistDb('all');
     res.json({ success: true, message: 'Database reset to initial club seed', lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Mount Vite middleware in development mode
+  // Vite static middleware
   const distPath = path.join(__dirname, 'dist');
   const isProd = process.env.NODE_ENV === 'production' || __filename.endsWith('server.js');
   if (!isProd) {
@@ -975,14 +1028,13 @@ async function startServer() {
         middlewareMode: true,
         host: '0.0.0.0',
         watch: {
-          ignored: ['**/data/**', '**/dist/**', '**/server.js']
+          ignored: ['**/dist/**', '**/server.js']
         }
       },
       appType: 'spa'
     });
     app.use(vite.middlewares);
   } else if (fs.existsSync(distPath)) {
-    // Serve production static build
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -1000,7 +1052,8 @@ startServer().catch((err) => {
   console.error("[Server] Failed to start:", err);
 });
 
-export default (req: any, res: any) => {
+export default async (req: any, res: any) => {
+  await ensureDbLoaded();
   const expressApp = (globalThis as any).__expressApp;
   if (expressApp) return expressApp(req, res);
   res.status(500).json({ error: "Server starting..." });
