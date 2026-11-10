@@ -272,6 +272,16 @@ async function ensureDbLoaded(): Promise<void> {
   await dbInitPromise;
 }
 
+// Hàm làm sạch định dạng văn bản cho khung tra cứu CLB
+function formatCleanBookResponse(rawText: string): string {
+  return rawText
+    .replace(/^#{1,6}\s*/gm, '') // Xóa toàn bộ dấu ### ở đầu dòng
+    .replace(/\*\*(.*?)\*\*/g, '$1') // Xóa dấu ** in đậm thô
+    .replace(/^\s*[\*\-]\s+/gm, '  • ') // Đổi dấu * hoặc - đầu dòng thành chấm tròn đẹp mắt
+    .replace(/\n{3,}/g, '\n\n') // Giữ khoảng cách dòng thoáng vừa phải
+    .trim();
+}
+
 async function startServer() {
   const app = express();
   (globalThis as any).__expressApp = app;
@@ -963,7 +973,7 @@ async function startServer() {
     res.json({ success: true, application: newApp, applications: dbState.applications, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // ĐÃ TỐI ƯU: Tự động dò các dòng model Gemini thế hệ mới nhất (3.8 / 3.0 / 2.5)
+  // ĐÃ NÂNG CẤP TRÌNH BÀY: Không dùng ký tự ### hay ** thô, bố cục chuẩn tạp chí CLB
   app.post('/api/books/search-grounding', async (req, res) => {
     const { query } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
@@ -981,16 +991,31 @@ async function startServer() {
       return;
     }
 
-    const promptText = `Bạn là Trợ lý AI Văn học & Kỹ năng của Câu lạc bộ Đọc và Giới thiệu sách Trường Đại học An Giang (AGU). Thành viên vừa nhập vào thanh tra cứu: "${query.trim()}".
-Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng Việt:
-1) Giới thiệu tác phẩm / tác giả / chủ đề.
-2) Thông điệp & giá trị cốt lõi.
-3) Gợi ý câu hỏi thảo luận cho buổi sinh hoạt CLB.`;
+    const promptText = `Bạn là Trợ lý Văn học & Kỹ năng của Câu lạc bộ Đọc và Giới thiệu sách Trường Đại học An Giang (AGU). Thành viên vừa tra cứu: "${query.trim()}".
+
+QUY TẮC TRÌNH BÀY BẮT BUỘC (TUYỆT ĐỐI KHÔNG DÙNG MARKDOWN):
+- Tuyệt đối KHÔNG dùng dấu thăng (#, ##, ###) và KHÔNG dùng dấu sao (*, **).
+- Dùng chữ IN HOA kèm biểu tượng cảm xúc ở đầu các đề mục lớn và trình bày thoáng mắt theo đúng mẫu bố cục sau:
+
+📖 TỔNG QUAN TÁC PHẨM & TÁC GIẢ
+  • Tác phẩm / Chủ đề: [Tên tác phẩm/chủ đề]
+  • Tác giả / Nguồn gốc: [Thông tin tác giả & bối cảnh ra đời ngắn gọn, sắc nét]
+  • Nội dung cốt lõi: [Tóm tắt mạch lạc, giàu cảm xúc văn chương trong 2-3 câu]
+
+🌱 THÔNG ĐIỆP & GIÁ TRỊ TRỌNG TÂM
+  • Tư tưởng chủ đạo: [Thông điệp nhân sinh sâu sắc nhất]
+  • Giá trị thực tiễn: [Bài học ứng dụng cho sinh viên về nhận thức, tâm hồn hoặc kỹ năng]
+
+💬 GỢI Ý THẢO LUẬN SINH HOẠT CLB
+  1. [Câu hỏi mở số 1 khơi gợi góc nhìn đa chiều của bạn đọc]
+  2. [Câu hỏi mở số 2 liên hệ trực tiếp với trải nghiệm tuổi trẻ và đời sống sinh viên AGU]
+  3. [Câu hỏi mở số 3 thảo luận về nghệ thuật viết hoặc cách lan tỏa giá trị cuốn sách]
+
+✨ Lời nhắn từ CLB: [1 câu truyền cảm hứng đọc sách ngắn gọn, ấm áp]`;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
 
-      // Danh sách ưu tiên các model thế hệ mới dành cho tài khoản mới
       const candidateModels = [
         'gemini-3.8-flash',
         'gemini-3-flash-preview',
@@ -1002,7 +1027,6 @@ Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng
       let response: any = null;
       let lastError: any = null;
 
-      // Bước 1: Thử gọi kèm công cụ Google Search Grounding
       for (const modelName of candidateModels) {
         try {
           response = await ai.models.generateContent({
@@ -1018,7 +1042,6 @@ Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng
         }
       }
 
-      // Bước 2: Nếu gói cước giới hạn công cụ Search, tự động gọi trực tiếp model AI
       if (!response || !response.text) {
         for (const modelName of candidateModels) {
           try {
@@ -1044,7 +1067,7 @@ Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng
 
       res.json({
         success: true,
-        text: response.text,
+        text: formatCleanBookResponse(response.text),
         sources
       });
     } catch (err: any) {
