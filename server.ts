@@ -963,7 +963,7 @@ async function startServer() {
     res.json({ success: true, application: newApp, applications: dbState.applications, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // ĐÃ SỬA: Gemini Search Grounding (từ dòng 655 cũ) - Chạy chuẩn trên Vercel
+  // ĐÃ TỐI ƯU: Tự động dò các dòng model Gemini thế hệ mới nhất (3.8 / 3.0 / 2.5)
   app.post('/api/books/search-grounding', async (req, res) => {
     const { query } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
@@ -975,7 +975,7 @@ async function startServer() {
     if (!apiKey) {
       res.json({
         success: true,
-        text: '⚠️ Chưa tìm thấy khóa GEMINI_API_KEY trên Vercel. Bạn vui lòng kiểm tra lại mục Environment Variables.',
+        text: '⚠️ Chưa tìm thấy khóa GEMINI_API_KEY trên Vercel.',
         sources: []
       });
       return;
@@ -989,22 +989,52 @@ Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      let response;
 
-      try {
-        response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: promptText,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
-        });
-      } catch (searchErr) {
-        console.warn('[BookSearch] Fallback without search tool:', searchErr);
-        response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: promptText,
-        });
+      // Danh sách ưu tiên các model thế hệ mới dành cho tài khoản mới
+      const candidateModels = [
+        'gemini-3.8-flash',
+        'gemini-3-flash-preview',
+        'gemini-3-flash',
+        'gemini-3.0-flash',
+        'gemini-2.5-pro'
+      ];
+
+      let response: any = null;
+      let lastError: any = null;
+
+      // Bước 1: Thử gọi kèm công cụ Google Search Grounding
+      for (const modelName of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: promptText,
+            config: {
+              tools: [{ googleSearch: {} }],
+            },
+          });
+          if (response && response.text) break;
+        } catch (err: any) {
+          lastError = err;
+        }
+      }
+
+      // Bước 2: Nếu gói cước giới hạn công cụ Search, tự động gọi trực tiếp model AI
+      if (!response || !response.text) {
+        for (const modelName of candidateModels) {
+          try {
+            response = await ai.models.generateContent({
+              model: modelName,
+              contents: promptText,
+            });
+            if (response && response.text) break;
+          } catch (err: any) {
+            lastError = err;
+          }
+        }
+      }
+
+      if (!response || !response.text) {
+        throw lastError || new Error('Không tìm thấy model phù hợp.');
       }
 
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -1014,14 +1044,14 @@ Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng
 
       res.json({
         success: true,
-        text: response.text || 'Không tìm thấy kết quả phù hợp.',
+        text: response.text,
         sources
       });
     } catch (err: any) {
       console.error('[BookSearch] Gemini error:', err);
       res.json({
         success: true,
-        text: `⚠️ Lỗi kết nối khóa Gemini API: ${err?.message || 'Khóa API chưa đúng định dạng AIzaSy...'}. Hãy kiểm tra lại mã GEMINI_API_KEY trên Vercel.`,
+        text: `⚠️ Chi tiết kết nối AI: ${err?.message || 'Lỗi không xác định'}`,
         sources: []
       });
     }
