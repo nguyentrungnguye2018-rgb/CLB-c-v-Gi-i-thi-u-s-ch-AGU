@@ -963,29 +963,49 @@ async function startServer() {
     res.json({ success: true, application: newApp, applications: dbState.applications, lastUpdated: dbState.lastUpdated, state: dbState });
   });
 
-  // Gemini Search Grounding
+  // ĐÃ SỬA: Gemini Search Grounding (từ dòng 655 cũ) - Chạy chuẩn trên Vercel
   app.post('/api/books/search-grounding', async (req, res) => {
     const { query } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
       res.status(400).json({ error: 'Vui lòng nhập tên sách hoặc tác giả cần tra cứu!' });
       return;
     }
+
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) {
+      res.json({
+        success: true,
+        text: '⚠️ Chưa tìm thấy khóa GEMINI_API_KEY trên Vercel. Bạn vui lòng kiểm tra lại mục Environment Variables.',
+        sources: []
+      });
+      return;
+    }
+
+    const promptText = `Bạn là Trợ lý AI Văn học & Kỹ năng của Câu lạc bộ Đọc và Giới thiệu sách Trường Đại học An Giang (AGU). Thành viên vừa nhập vào thanh tra cứu: "${query.trim()}".
+Hãy phản hồi ngắn gọn, súc tích, truyền cảm hứng bằng tiếng Việt:
+1) Giới thiệu tác phẩm / tác giả / chủ đề.
+2) Thông điệp & giá trị cốt lõi.
+3) Gợi ý câu hỏi thảo luận cho buổi sinh hoạt CLB.`;
+
     try {
-      const ai = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          }
-        }
-      });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: `Hãy tra cứu thông tin chính xác, cập nhật về cuốn sách, tác giả hoặc chủ đề văn học sau cho Câu lạc bộ Đọc và Giới thiệu sách Trường Đại học An Giang (AGU): "${query.trim()}". Trình bày ngắn gọn, súc tích bằng tiếng Việt gồm: 1) Giới thiệu tác phẩm/tác giả, 2) Thông điệp & giá trị cốt lõi, 3) Gợi ý thảo luận cho buổi sinh hoạt CLB.`,
-        config: {
-          tools: [{ googleSearch: {} }],
-        },
-      });
+      const ai = new GoogleGenAI({ apiKey });
+      let response;
+
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: promptText,
+          config: {
+            tools: [{ googleSearch: {} }],
+          },
+        });
+      } catch (searchErr) {
+        console.warn('[BookSearch] Fallback without search tool:', searchErr);
+        response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: promptText,
+        });
+      }
 
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const sources = groundingChunks
@@ -998,9 +1018,11 @@ async function startServer() {
         sources
       });
     } catch (err: any) {
-      console.error('[BookSearch] Gemini Google Search Grounding error:', err);
-      res.status(500).json({
-        error: err?.message || 'Không thể tra cứu thông tin sách lúc này.'
+      console.error('[BookSearch] Gemini error:', err);
+      res.json({
+        success: true,
+        text: `⚠️ Lỗi kết nối khóa Gemini API: ${err?.message || 'Khóa API chưa đúng định dạng AIzaSy...'}. Hãy kiểm tra lại mã GEMINI_API_KEY trên Vercel.`,
+        sources: []
       });
     }
   });
