@@ -5,7 +5,7 @@
 
 export type RoleType = 'member' | 'lead' | 'bcn_admin';
 
-export type AdminAccountType = 'master_root' | 'bcn_elected' | 'member';
+export type AdminAccountType = 'master_root' | 'bcn_elected' | 'hsv_supervisor' | 'member';
 
 export type DepartmentType = 'BQT' | 'Truyền thông' | 'Nội dung' | 'Nhân sự & Kế hoạch' | 'Hậu cần';
 
@@ -13,6 +13,7 @@ export type ClubRoleType =
   | 'root'
   | 'president'
   | 'vice_president'
+  | 'hsv_supervisor'
   | 'former_bcn'
   | 'alumni_viewer'
   | 'member'
