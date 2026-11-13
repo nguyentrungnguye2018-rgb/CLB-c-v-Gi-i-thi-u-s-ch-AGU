@@ -1,27 +1,26 @@
 import React, { useState } from 'react';
 import { 
   Vault, 
-  TrendingUp, 
-  TrendingDown, 
-  DollarSign, 
   PieChart, 
   PlusCircle, 
   Download, 
-  Lock, 
   ShieldCheck, 
   Receipt, 
-  Filter, 
   Search, 
-  FileSpreadsheet, 
   ArrowUpRight, 
   ArrowDownLeft, 
   X,
   Sparkles,
-  Calendar,
   Camera,
   Upload,
   Image as ImageIcon,
-  Eye
+  Eye,
+  Edit3,
+  Trash2,
+  CheckCircle2,
+  AlertTriangle,
+  History,
+  PenTool
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Transaction, UserProfile } from '../types';
@@ -43,111 +42,275 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
   isBcnMode,
   onUnlockBcn,
   onAddTransaction,
-  onOpenAuthModal
 }) => {
-  const [passcodeInput, setPasscodeInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // New Transaction form
+  // State cho Tạo mới & Chỉnh sửa phiếu
+  const [editingTx, setEditingTx] = useState<any | null>(null);
   const [newType, setNewType] = useState<'income' | 'expense'>('expense');
   const [newTitle, setNewTitle] = useState('');
   const [newAmount, setNewAmount] = useState<number>(150000);
   const [newCategory, setNewCategory] = useState<Transaction['category']>('Mua sách mới');
-  const [newPerformedBy, setNewPerformedBy] = useState(`${currentUser.name} (${currentUser.department})`);
+  const [newSignerName, setNewSignerName] = useState(''); // Bắt buộc tự gõ tên ký xác nhận
   const [newNote, setNewNote] = useState('');
   const [newReceiptImage, setNewReceiptImage] = useState<string>('');
   const [previewReceiptTx, setPreviewReceiptTx] = useState<Transaction | null>(null);
   const receiptFileInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Calculations
-  const totalIncome = transactions
-    .filter(t => t.type === 'income')
+  // State cho Hộp thoại xác nhận 2 lớp ("Bạn đã chắc chắn chưa?")
+  const [confirmSavePayload, setConfirmSavePayload] = useState<any | null>(null);
+
+  // State cho Duyệt xóa chéo 2 chiều
+  const [deleteTargetTx, setDeleteTargetTx] = useState<any | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [localTxOverrides, setLocalTxOverrides] = useState<Record<string, any>>({});
+  const [deletedIdsLocal, setDeletedIdsLocal] = useState<string[]>([]);
+
+  // Phân quyền Chủ nhiệm & Phó Chủ nhiệm
+  const isPresident = isClubPresidentUser(currentUser) || isMasterRootUser(currentUser) || isBcnMode;
+  const isVicePresident = isClubVicePresidentUser(currentUser) || (currentUser.position || '').toLowerCase().includes('phó chủ nhiệm');
+  const canManageFund = isPresident || isVicePresident;
+
+  // Hợp nhất dữ liệu giao dịch với các cập nhật/trạng thái mới nhất
+  const mergedTransactions: any[] = transactions
+    .filter((t) => !deletedIdsLocal.includes(t.id))
+    .map((t) => (localTxOverrides[t.id] ? { ...t, ...localTxOverrides[t.id] } : t));
+
+  // Tính toán tổng thu chi
+  const totalIncome = mergedTransactions
+    .filter((t) => t.type === 'income')
     .reduce((acc, curr) => acc + curr.amount, 0);
 
-  const totalExpense = transactions
-    .filter(t => t.type === 'expense')
+  const totalExpense = mergedTransactions
+    .filter((t) => t.type === 'expense')
     .reduce((acc, curr) => acc + curr.amount, 0);
 
   const currentBalance = totalIncome - totalExpense;
 
-  // Filtered transactions
-  const filteredList = transactions.filter(t => {
+  // Lọc danh sách giao dịch
+  const filteredList = mergedTransactions.filter((t) => {
     const matchesType = filterType === 'all' || t.type === filterType;
-    const matchesSearch = t.title.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-                          t.category.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-                          t.receiptCode.toLowerCase().includes(searchKeyword.toLowerCase());
+    const matchesSearch =
+      t.title.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+      t.category.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+      t.receiptCode.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+      (t.performedBy || '').toLowerCase().includes(searchKeyword.toLowerCase());
     return matchesType && matchesSearch;
   });
 
-  // Category breakdown for expense distribution bar
-  const expenseByCategory = transactions
-    .filter(t => t.type === 'expense')
+  // Phân bổ chi tiêu
+  const expenseByCategory = mergedTransactions
+    .filter((t) => t.type === 'expense')
     .reduce((acc, curr) => {
       acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
       return acc;
     }, {} as Record<string, number>);
 
-  const handleUnlock = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (passcodeInput.trim() === MASTER_PASSCODE) {
-      onUnlockBcn(passcodeInput);
-      setErrorMsg('');
-      setPasscodeInput('');
-      confetti({
-        particleCount: 60,
-        spread: 70,
-        origin: { y: 0.5 }
+  // Đồng bộ danh sách giao dịch lên máy chủ Firestore
+  const syncTransactionsToServer = async (updatedList: any[]) => {
+    try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'transactions', data: updatedList })
       });
-    } else {
-      setErrorMsg('Mã xác thực không đúng. Vui lòng kiểm tra lại.');
+    } catch (err) {
+      console.error('Lỗi đồng bộ quỹ lên server:', err);
     }
   };
 
-  const handleCreateTx = (e: React.FormEvent) => {
+  // Gửi thông báo khẩn nhắc duyệt xóa chéo giữa Chủ nhiệm & Phó Chủ nhiệm
+  const sendCrossDeleteNotice = async (tx: any, reason: string, targetRoleLabel: string) => {
+    try {
+      await fetch('/api/emergency-notices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `Yêu cầu duyệt xóa phiếu quỹ: ${tx.receiptCode}`,
+          content: `${currentUser.name} (${currentUser.position || 'BCN'}) đề nghị xóa phiếu "${tx.title}" (${formatVND(tx.amount)}). Lý do: ${reason || 'Nhập nhầm số liệu'}. Kính chuyển ${targetRoleLabel} kiểm tra và xác nhận tại mục Két Quỹ CLB.`
+        })
+      });
+    } catch (err) {
+      console.error('Lỗi gửi thông báo duyệt xóa:', err);
+    }
+  };
+
+  const openCreateModal = () => {
+    setEditingTx(null);
+    setNewType('expense');
+    setNewTitle('');
+    setNewAmount(150000);
+    setNewCategory('Mua sách mới');
+    setNewSignerName(''); // Bắt buộc trống để người nhập tự ký tên
+    setNewNote('');
+    setNewReceiptImage('');
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (tx: any) => {
+    setEditingTx(tx);
+    setNewType(tx.type);
+    setNewTitle(tx.title);
+    setNewAmount(tx.amount);
+    setNewCategory(tx.category);
+    setNewSignerName(''); // Bắt buộc người sửa phải tự gõ tên ký xác nhận
+    setNewNote(tx.note || '');
+    setNewReceiptImage(tx.receiptImage || '');
+    setIsModalOpen(true);
+  };
+
+  // Bước 1: Kiểm tra chữ ký tay và mở hộp thoại xác nhận "Bạn đã chắc chắn chưa?"
+  const handlePrepareSaveTx = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || newAmount <= 0) return;
+    if (newSignerName.trim().length < 2) {
+      alert('Vui lòng tự nhập đầy đủ Họ và Tên của bạn vào ô Ký tên xác nhận!');
+      return;
+    }
 
-    const receiptPrefix = newType === 'income' ? 'PT' : 'PC';
-    const randomCode = Math.floor(100 + Math.random() * 900);
-    const receiptCode = `${receiptPrefix}-2026-${randomCode}`;
+    const roleLabel = isPresident ? 'Chủ nhiệm CLB' : isVicePresident ? 'Phó Chủ nhiệm CLB' : (currentUser.position || 'BCN');
+    const signedIdentity = `${newSignerName.trim()} (${roleLabel})`;
+    const nowStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
 
-    onAddTransaction({
-      type: newType,
-      title: newTitle,
-      amount: Number(newAmount),
-      category: newCategory,
-      date: new Date().toLocaleDateString('vi-VN'),
-      performedBy: newPerformedBy,
-      approvedBy: 'ThS. Huỳnh Bảo Anh (Chủ nhiệm CLB)',
-      receiptCode,
-      note: newNote,
-      receiptImage: newReceiptImage || undefined
-    });
+    if (editingTx) {
+      const prevHistory = Array.isArray(editingTx.editHistory) ? editingTx.editHistory : [];
+      const updatedTx = {
+        ...editingTx,
+        type: newType,
+        title: newTitle.trim(),
+        amount: Number(newAmount),
+        category: newCategory,
+        note: newNote.trim(),
+        receiptImage: newReceiptImage || undefined,
+        lastEditedBy: signedIdentity,
+        lastEditedAt: nowStr,
+        editHistory: [
+          ...prevHistory,
+          `Đã chỉnh sửa bởi ${signedIdentity} lúc ${nowStr}`
+        ]
+      };
+      setConfirmSavePayload({ mode: 'edit', tx: updatedTx });
+    } else {
+      const receiptPrefix = newType === 'income' ? 'PT' : 'PC';
+      const randomCode = Math.floor(100 + Math.random() * 900);
+      const receiptCode = `${receiptPrefix}-2026-${randomCode}`;
 
-    confetti({
-      particleCount: 50,
-      spread: 60,
-      origin: { y: 0.6 }
-    });
+      const newTxPayload = {
+        type: newType,
+        title: newTitle.trim(),
+        amount: Number(newAmount),
+        category: newCategory,
+        date: new Date().toLocaleDateString('vi-VN'),
+        performedBy: signedIdentity,
+        approvedBy: `Đã ký xác nhận bởi ${signedIdentity}`,
+        receiptCode,
+        note: newNote.trim(),
+        receiptImage: newReceiptImage || undefined,
+        editHistory: []
+      };
+      setConfirmSavePayload({ mode: 'create', tx: newTxPayload });
+    }
+  };
 
+  // Bước 2: Sau khi người dùng bấm "Chắc chắn, lưu phiếu"
+  const handleConfirmExecuteSave = async () => {
+    if (!confirmSavePayload) return;
+
+    if (confirmSavePayload.mode === 'create') {
+      onAddTransaction(confirmSavePayload.tx);
+      confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.6 }
+      });
+    } else if (confirmSavePayload.mode === 'edit') {
+      const updatedTx = confirmSavePayload.tx;
+      setLocalTxOverrides((prev) => ({ ...prev, [updatedTx.id]: updatedTx }));
+      const updatedList = mergedTransactions.map((t) => (t.id === updatedTx.id ? updatedTx : t));
+      await syncTransactionsToServer(updatedList);
+    }
+
+    setConfirmSavePayload(null);
     setIsModalOpen(false);
+    setEditingTx(null);
     setNewTitle('');
+    setNewSignerName('');
     setNewNote('');
     setNewReceiptImage('');
   };
 
+  // Yêu cầu xóa phiếu (Duyệt chéo 2 chiều giữa Chủ nhiệm và Phó Chủ nhiệm)
+  const handleRequestCrossDelete = async () => {
+    if (!deleteTargetTx) return;
+    const requesterRole = isPresident ? 'president' : 'vice_president';
+    const targetRoleLabel = isPresident ? 'Phó Chủ nhiệm CLB' : 'Chủ nhiệm CLB';
+    const nowStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    const pendingDeleteInfo = {
+      status: 'pending_delete',
+      requestedById: currentUser.id,
+      requestedByName: `${currentUser.name} (${isPresident ? 'Chủ nhiệm CLB' : 'Phó Chủ nhiệm CLB'})`,
+      requestedByRole: requesterRole,
+      waitingForRole: isPresident ? 'vice_president' : 'president',
+      waitingForLabel: targetRoleLabel,
+      reason: deleteReason.trim() || 'Nhập nhầm thông tin phiếu',
+      requestedAt: nowStr
+    };
+
+    const updatedTx = { ...deleteTargetTx, pendingDelete: pendingDeleteInfo };
+    setLocalTxOverrides((prev) => ({ ...prev, [deleteTargetTx.id]: updatedTx }));
+
+    const updatedList = mergedTransactions.map((t) => (t.id === deleteTargetTx.id ? updatedTx : t));
+    await syncTransactionsToServer(updatedList);
+    await sendCrossDeleteNotice(deleteTargetTx, deleteReason.trim(), targetRoleLabel);
+
+    setDeleteTargetTx(null);
+    setDeleteReason('');
+  };
+
+  // Phê duyệt đồng ý xóa phiếu từ người còn lại
+  const handleApproveCrossDelete = async (tx: any) => {
+    if (!window.confirm(`Xác nhận đồng ý xóa vĩnh viễn phiếu "${tx.title}" (${formatVND(tx.amount)}) theo đề nghị của ${tx.pendingDelete?.requestedByName}?`)) {
+      return;
+    }
+
+    setDeletedIdsLocal((prev) => [...prev, tx.id]);
+    try {
+      await fetch('/api/items/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'transactions', itemId: tx.id })
+      });
+    } catch (err) {
+      console.error('Lỗi xóa phiếu trên server:', err);
+    }
+  };
+
+  // Từ chối xóa (Giữ lại phiếu)
+  const handleRejectCrossDelete = async (tx: any) => {
+    const updatedTx = { ...tx, pendingDelete: null };
+    setLocalTxOverrides((prev) => ({ ...prev, [tx.id]: updatedTx }));
+    const updatedList = mergedTransactions.map((t) => (t.id === tx.id ? updatedTx : t));
+    await syncTransactionsToServer(updatedList);
+  };
+
   const exportFinancialReport = () => {
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + "Mã phiếu,Loại,Hạng mục,Nội dung,Số tiền (VNĐ),Ngày,Người lập\n"
-      + transactions.map(t => `"${t.receiptCode}","${t.type === 'income' ? 'Thu' : 'Chi'}","${t.category}","${t.title}","${t.amount}","${t.date}","${t.performedBy}"`).join("\n");
-    
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      'Mã phiếu,Loại,Hạng mục,Nội dung,Số tiền (VNĐ),Ngày,Người lập & Ký xác nhận,Lịch sử chỉnh sửa\n' +
+      mergedTransactions
+        .map(
+          (t) =>
+            `"${t.receiptCode}","${t.type === 'income' ? 'Thu' : 'Chi'}","${t.category}","${t.title}","${t.amount}","${t.date}","${t.performedBy}","${(t.editHistory || []).join(' | ')}"`
+        )
+        .join('\n');
+
     const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `BaoCao_QuyCLB_AGU_${new Date().toISOString().slice(0,10)}.csv`);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `BaoCao_QuyCLB_AGU_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -157,15 +320,9 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(num);
   };
 
-  const isPresident = isClubPresidentUser(currentUser);
-  const isVicePresident = isClubVicePresidentUser(currentUser);
-  const isRoot = isMasterRootUser(currentUser);
-  const isSubDeptLeader = currentUser.departmentRole === 'leader' || currentUser.departmentRole === 'vice_leader' || currentUser.role === 'lead';
-  const canAddExpense = isPresident || isVicePresident || isRoot || isSubDeptLeader || isBcnMode;
-
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Top Header - Khối cứng mềm mại */}
+      {/* Top Header */}
       <div className="rounded-3xl p-6 sm:p-8 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="space-y-2 max-w-xl">
           <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#E5A140] text-[#382215] text-xs font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215]">
@@ -176,7 +333,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             Két Quỹ & Quản Lý Ngân Sách CLB
           </h2>
           <p className="text-xs sm:text-sm text-[#5C432C] leading-relaxed font-medium">
-            Toàn bộ nguồn thu chi, hội phí, tiền mua sách mới tại Thư viện AGU và tài trợ đều được <strong>công khai minh bạch cho toàn thể thành viên xem xét và đối soát</strong>. Quyền lập phiếu chi thuộc về Trưởng/Phó Ban và Ban Chủ Nhiệm.
+            Mọi khoản thu chi đều yêu cầu <strong>người lập tự ký tên xác nhận</strong>. Chủ nhiệm và Phó Chủ nhiệm có quyền lập/sửa phiếu (có lưu vết) và <strong>duyệt xóa chéo 2 chiều</strong> để đảm bảo minh bạch tuyệt đối.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -188,10 +345,10 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             <Download className="w-4 h-4 text-[#245351]" />
             <span>Xuất Báo Cáo CSV</span>
           </button>
-          {canAddExpense ? (
+          {canManageFund ? (
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={openCreateModal}
               className="px-5 py-2.5 rounded-xl bg-[#C8532B] hover:bg-[#A63E1B] text-white text-xs sm:text-sm font-black flex items-center gap-2 shadow-[3px_3px_0px_#382215] border-2 border-[#382215] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0px_#382215] cursor-pointer transition"
             >
               <PlusCircle className="w-4 h-4 text-[#FFE29A]" />
@@ -206,9 +363,8 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       </div>
 
-      {/* Financial Metrics Cards - Khối cứng mềm mại */}
+      {/* Financial Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Current Net Balance */}
         <div className="rounded-2xl p-5 border-2 border-[#382215] bg-[#F2E5C9] shadow-[4px_4px_0px_#382215] space-y-2">
           <div className="flex items-center justify-between text-xs font-black text-[#245351]">
             <span>Số Dư Quỹ Hiện Có</span>
@@ -218,15 +374,14 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             {formatVND(currentBalance)}
           </div>
           <p className="text-[11px] text-[#245351] font-bold">
-            Sẵn sàng cho chuỗi hoạt động Tháng 11
+            Sẵn sàng cho các hoạt động của CLB
           </p>
         </div>
 
-        {/* Total Income */}
         <div className="rounded-2xl p-5 border-2 border-[#382215] bg-[#FFFDF8] shadow-[4px_4px_0px_#382215] space-y-2">
           <div className="flex items-center justify-between text-xs font-black text-[#486A39]">
             <span>Tổng Thu Vào</span>
-            <div className="w-7 h-7 rounded-lg bg-[#E5F0E4] border border-[#382215] flex items-center justify-center text-[#486A39] shadow-2xs">
+            <div className="w-7 h-7 rounded-lg bg-[#E5F0E4] border border-[#382215] flex items-center justify-center text-[#486A39]">
               <ArrowDownLeft className="w-4 h-4" />
             </div>
           </div>
@@ -234,15 +389,14 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             {formatVND(totalIncome)}
           </div>
           <p className="text-[11px] text-[#6E472B] font-semibold">
-            Gồm hội phí & tài trợ cựu sinh viên
+            Gồm hội phí & tài trợ hoạt động
           </p>
         </div>
 
-        {/* Total Expense */}
         <div className="rounded-2xl p-5 border-2 border-[#382215] bg-[#FFFDF8] shadow-[4px_4px_0px_#382215] space-y-2">
           <div className="flex items-center justify-between text-xs font-black text-[#C8532B]">
             <span>Tổng Đã Chi Ra</span>
-            <div className="w-7 h-7 rounded-lg bg-[#FBECE6] border border-[#382215] flex items-center justify-center text-[#C8532B] shadow-2xs">
+            <div className="w-7 h-7 rounded-lg bg-[#FBECE6] border border-[#382215] flex items-center justify-center text-[#C8532B]">
               <ArrowUpRight className="w-4 h-4" />
             </div>
           </div>
@@ -250,29 +404,28 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             {formatVND(totalExpense)}
           </div>
           <p className="text-[11px] text-[#8C3B1E] font-semibold">
-            Mua sách mới, in ấn, teabreak
+            Mua sách mới, in ấn, sự kiện
           </p>
         </div>
 
-        {/* Reserve Fund for Books */}
         <div className="rounded-2xl p-5 border-2 border-[#382215] bg-[#FFFDF8] shadow-[4px_4px_0px_#382215] space-y-2">
           <div className="flex items-center justify-between text-xs font-black text-[#245351]">
             <span>Chi Mua Sách Mới</span>
             <Receipt className="w-5 h-5 text-[#245351]" />
           </div>
           <div className="text-2xl font-black text-[#245351] tabular-nums">
-            {formatVND(transactions.filter(t => t.category === 'Mua sách mới').reduce((acc, curr) => acc + curr.amount, 0))}
+            {formatVND(mergedTransactions.filter((t) => t.category === 'Mua sách mới').reduce((acc, curr) => acc + curr.amount, 0))}
           </div>
           <p className="text-[11px] text-[#245351] font-semibold">
-            Tổng số chứng từ: {transactions.length} phiếu
+            Tổng số chứng từ: {mergedTransactions.length} phiếu
           </p>
         </div>
       </div>
 
-      {/* Artistic Interactive Balance Scale & Audit Seal (Cán Cân Tài Chính Thu - Chi & Con Dấu Triện) */}
+      {/* Cán Cân Ngân Sách */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] flex flex-col lg:flex-row items-center justify-between gap-6">
         <div className="space-y-2 max-w-lg">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E5A140] text-[#382215] text-[11px] font-black uppercase border border-[#382215] shadow-xs">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E5A140] text-[#382215] text-[11px] font-black uppercase border border-[#382215]">
             <Sparkles className="w-3.5 h-3.5 text-[#382215]" />
             <span>Cán Cân Ngân Sách Đối Soát Cổ Điển</span>
           </div>
@@ -280,7 +433,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             Cán Cân Thu - Chi Minh Bạch Tuyệt Đối
           </h3>
           <p className="text-xs text-[#5C432C] leading-relaxed font-medium">
-            Mọi khoản thu hội phí, tiền sách và chi phí tổ chức đều được cân đối chính xác đến từng đồng. Khi có phiếu thu chi mới, cán cân tự động cập nhật góc nghiêng đối soát thực tế.
+            Mọi khoản thu hội phí, tiền sách và chi phí tổ chức đều được cân đối chính xác đến từng đồng và gắn liền với chữ ký người thực hiện.
           </p>
           <div className="pt-2 flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-300 text-xs font-bold">
@@ -295,18 +448,14 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
           </div>
         </div>
 
-        {/* Vintage SVG Balance Scale Graphic */}
         <div className="flex flex-col items-center justify-center p-4 bg-[#F2E5C9] rounded-2xl border-2 border-[#382215] shadow-[3px_3px_0px_#382215] w-full sm:w-80 shrink-0">
           <div className="text-[11px] font-black text-[#8C3B1E] uppercase tracking-wider mb-1">
             Góc Cân Đối Ngân Sách CLB
           </div>
           <div className="w-52 h-32 flex items-center justify-center relative">
             <svg viewBox="0 0 200 120" className="w-full h-full overflow-visible">
-              {/* Fulcrum Base */}
               <polygon points="100,60 85,115 115,115" fill="#382215" stroke="#245351" strokeWidth="2" />
               <circle cx="100" cy="60" r="6" fill="#E5A140" stroke="#382215" strokeWidth="2" />
-
-              {/* Tilted Balance Arm */}
               {(() => {
                 const diff = totalIncome - totalExpense;
                 const total = totalIncome + totalExpense || 1;
@@ -314,11 +463,9 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 return (
                   <g transform={`rotate(${tilt}, 100, 60)`} className="transition-transform duration-700">
                     <line x1="20" y1="60" x2="180" y2="60" stroke="#382215" strokeWidth="5" strokeLinecap="round" />
-                    {/* Left pan (Income / Thu) */}
                     <line x1="30" y1="60" x2="20" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <line x1="30" y1="60" x2="40" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <ellipse cx="30" cy="92" rx="22" ry="6" fill="#486A39" stroke="#382215" strokeWidth="2" />
-                    {/* Right pan (Expense / Chi) */}
                     <line x1="170" y1="60" x2="160" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <line x1="170" y1="60" x2="180" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <ellipse cx="170" cy="92" rx="22" ry="6" fill="#C8532B" stroke="#382215" strokeWidth="2" />
@@ -334,7 +481,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       </div>
 
-      {/* Expense Allocation Distribution Bar - Khối cứng mềm mại */}
+      {/* Expense Allocation Distribution Bar */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[5px_5px_0px_#382215] space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-black text-sm sm:text-base text-[#382215] font-serif-vintage flex items-center gap-2">
@@ -373,9 +520,8 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       </div>
 
-      {/* Ledger & Transactions Table - Khối cứng mềm mại */}
+      {/* Ledger & Transactions Table */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] space-y-4">
-        {/* Controls bar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 bg-[#FFFDF8] p-1.5 rounded-2xl border-2 border-[#382215] shadow-[2px_2px_0px_#382215]">
             <button
@@ -385,7 +531,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 filterType === 'all' ? 'bg-[#382215] text-[#FAF3E3]' : 'text-[#6E472B] hover:text-[#382215]'
               }`}
             >
-              Tất cả ({transactions.length})
+              Tất cả ({mergedTransactions.length})
             </button>
             <button
               type="button"
@@ -412,7 +558,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
               type="text"
               value={searchKeyword}
               onChange={(e) => setSearchKeyword(e.target.value)}
-              placeholder="Tìm theo nội dung, mã phiếu..."
+              placeholder="Tìm theo nội dung, mã phiếu, người ký..."
               className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#FFFDF8] border-2 border-[#382215] text-xs font-bold text-[#382215] focus:outline-none focus:border-[#C8532B] shadow-[2px_2px_0px_#382215]"
             />
           </div>
@@ -420,74 +566,163 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
 
         {/* Transactions List */}
         <div className="space-y-3.5">
-          {filteredList.map((tx) => (
-            <div
-              key={tx.id}
-              className="bg-[#FFFDF8] p-4.5 rounded-2xl border-2 border-[#382215] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:shadow-[5px_5px_0px_#382215] hover:-translate-y-0.5 transition shadow-[3px_3px_0px_#382215]"
-            >
-              <div className="flex items-start gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-[#382215] shadow-2xs ${
-                  tx.type === 'income' 
-                    ? 'bg-[#E5F0E4] text-[#486A39]' 
-                    : 'bg-[#FBECE6] text-[#C8532B]'
-                }`}>
-                  {tx.type === 'income' ? <ArrowDownLeft className="w-5 h-5" /> : <ArrowUpRight className="w-5 h-5" />}
-                </div>
+          {filteredList.map((tx) => {
+            const pendingDelete = tx.pendingDelete;
+            // Kiểm tra người hiện tại có phải là bên còn lại cần duyệt xóa chéo không
+            const canApproveDelete =
+              pendingDelete &&
+              pendingDelete.requestedById !== currentUser.id &&
+              ((pendingDelete.waitingForRole === 'president' && isPresident) ||
+                (pendingDelete.waitingForRole === 'vice_president' && isVicePresident) ||
+                isPresident);
 
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-black text-sm text-[#382215]">{tx.title}</span>
-                    <span className="font-mono text-[10px] font-bold bg-[#FAF3E3] px-2 py-0.5 rounded border border-[#382215] text-[#382215]">
-                      {tx.receiptCode}
-                    </span>
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-[#245351] text-[#FFE29A]">
-                      {tx.category}
-                    </span>
+            return (
+              <div
+                key={tx.id}
+                className={`p-4.5 rounded-2xl border-2 border-[#382215] flex flex-col gap-3 text-xs transition shadow-[3px_3px_0px_#382215] ${
+                  pendingDelete ? 'bg-amber-50/90 border-amber-600' : 'bg-[#FFFDF8] hover:shadow-[5px_5px_0px_#382215]'
+                }`}
+              >
+                {/* Cảnh báo trạng thái chờ duyệt xóa chéo 2 chiều */}
+                {pendingDelete && (
+                  <div className="p-3 rounded-xl bg-amber-100 border-2 border-amber-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-start gap-2 text-amber-950">
+                      <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-black">
+                          Đang chờ {pendingDelete.waitingForLabel} duyệt xóa phiếu nhập lộn
+                        </p>
+                        <p className="text-[11px] font-medium">
+                          Người đề nghị: <strong>{pendingDelete.requestedByName}</strong> • Lý do: "{pendingDelete.reason}" ({pendingDelete.requestedAt})
+                        </p>
+                      </div>
+                    </div>
+                    {canApproveDelete ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleApproveCrossDelete(tx)}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-xs"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Đồng ý xóa</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRejectCrossDelete(tx)}
+                          className="px-3 py-1.5 rounded-lg bg-white hover:bg-stone-100 text-[#382215] border border-[#382215] font-bold text-[11px] cursor-pointer"
+                        >
+                          Giữ lại phiếu
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] font-black text-amber-800 bg-white/80 px-2.5 py-1 rounded-lg border border-amber-400 self-start sm:self-center">
+                        Đã gửi thông báo chờ đối soát
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-[#382215] ${
+                        tx.type === 'income' ? 'bg-[#E5F0E4] text-[#486A39]' : 'bg-[#FBECE6] text-[#C8532B]'
+                      }`}
+                    >
+                      {tx.type === 'income' ? <ArrowDownLeft className="w-5 h-5" /> : <ArrowUpRight className="w-5 h-5" />}
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-sm text-[#382215]">{tx.title}</span>
+                        <span className="font-mono text-[10px] font-bold bg-[#FAF3E3] px-2 py-0.5 rounded border border-[#382215] text-[#382215]">
+                          {tx.receiptCode}
+                        </span>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-[#245351] text-[#FFE29A]">
+                          {tx.category}
+                        </span>
+                      </div>
+
+                      <p className="text-[#6E472B] font-medium text-xs">
+                        Ngày lập: <strong>{tx.date}</strong> • Người thực hiện & ký xác nhận: <strong className="text-[#245351]">{tx.performedBy}</strong>
+                      </p>
+
+                      {tx.note && (
+                        <p className="text-[#8C3B1E] italic text-xs">
+                          Ghi chú: {tx.note}
+                        </p>
+                      )}
+
+                      {/* Hiển thị lịch sử lưu vết nếu phiếu từng được chỉnh sửa */}
+                      {Array.isArray(tx.editHistory) && tx.editHistory.length > 0 && (
+                        <div className="pt-1 space-y-0.5">
+                          {tx.editHistory.map((log: string, idx: number) => (
+                            <div key={idx} className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#245351] bg-[#E5F0E4]/70 px-2.5 py-0.5 rounded-md border border-[#245351]/30 mr-2">
+                              <History className="w-3 h-3" />
+                              <span>{log}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {tx.receiptImage && (
+                        <div className="pt-1.5 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewReceiptTx(tx)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#FAF3E3] hover:bg-[#F2E5C9] text-[#382215] text-[11px] font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] transition cursor-pointer"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5 text-[#C8532B]" />
+                            <span>Xem Biên Lai / Hóa Đơn</span>
+                            <Eye className="w-3 h-3 text-[#245351]" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  <p className="text-[#6E472B] font-medium text-xs">
-                    Ngày: {tx.date} • Người lập: <strong>{tx.performedBy}</strong> • Phê duyệt: {tx.approvedBy}
-                  </p>
-
-                  {tx.note && (
-                    <p className="text-[#8C3B1E] italic text-xs">
-                      Ghi chú: {tx.note}
-                    </p>
-                  )}
-
-                  {tx.receiptImage && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewReceiptTx(tx)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#FAF3E3] hover:bg-[#F2E5C9] text-[#382215] text-[11px] font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] transition cursor-pointer"
-                      >
-                        <ImageIcon className="w-3.5 h-3.5 text-[#C8532B]" />
-                        <span>Xem Biên Lai / Hóa Đơn Chụp</span>
-                        <Eye className="w-3 h-3 text-[#245351]" />
-                      </button>
+                  <div className="flex flex-col items-end justify-between gap-2 shrink-0 self-end sm:self-center">
+                    <div
+                      className={`text-base sm:text-lg font-black tabular-nums ${
+                        tx.type === 'income' ? 'text-[#486A39]' : 'text-[#C8532B]'
+                      }`}
+                    >
+                      {tx.type === 'income' ? '+' : '-'}
+                      {formatVND(tx.amount)}
                     </div>
-                  )}
-                </div>
-              </div>
 
-              <div className="text-right shrink-0 self-end sm:self-center">
-                <div className={`text-base sm:text-lg font-black tabular-nums ${
-                  tx.type === 'income' ? 'text-[#486A39]' : 'text-[#C8532B]'
-                }`}>
-                  {tx.type === 'income' ? '+' : '-'}{formatVND(tx.amount)}
-                </div>
-                <div className="flex items-center justify-end gap-1 mt-0.5">
-                  {tx.receiptImage && (
-                    <span className="text-[10px] font-black text-[#245351] bg-[#FAF3E3] border border-[#382215] px-2 py-0.5 rounded">
-                      Đã kèm biên lai
-                    </span>
-                  )}
-                  <span className="text-[10px] text-[#6E472B] font-semibold">Đã kiểm toán BCN</span>
+                    {/* Nút Sửa (Lưu vết) & Xóa (Duyệt chéo 2 chiều) dành cho Chủ nhiệm & Phó Chủ nhiệm */}
+                    {canManageFund && !pendingDelete && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(tx)}
+                          className="px-2.5 py-1 rounded-lg bg-[#FAF3E3] hover:bg-[#E5A140]/30 text-[#382215] border border-[#382215] font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                          title="Chỉnh sửa phiếu (Có lưu vết người sửa)"
+                        >
+                          <Edit3 className="w-3 h-3 text-[#245351]" />
+                          <span>Sửa phiếu</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteTargetTx(tx);
+                            setDeleteReason('');
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                          title="Báo xóa phiếu nhập lộn (Gửi duyệt chéo)"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Xóa lộn</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {filteredList.length === 0 && (
             <div className="text-center py-8 text-xs text-stone-500">
@@ -497,15 +732,15 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       </div>
 
-      {/* Modal: Create New Receipt / Voucher */}
+      {/* Modal: Tạo mới / Chỉnh sửa Phiếu Thu Chi (Bắt buộc tự ký tên) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-[#FAF7F0] rounded-2xl border-2 border-[#5E936B]/50 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-[#FAF7F0] rounded-2xl border-2 border-[#382215] shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
             <div className="bg-[#24432B] text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-emerald-300" />
                 <h3 className="font-bold text-base font-serif-vintage">
-                  Tạo Phiếu Thu / Chi Ngân Sách CLB
+                  {editingTx ? `Chỉnh Sửa Phiếu Quỹ (${editingTx.receiptCode})` : 'Tạo Phiếu Thu / Chi Ngân Sách CLB'}
                 </h3>
               </div>
               <button
@@ -517,7 +752,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleCreateTx} className="p-6 overflow-y-auto space-y-4 text-xs sm:text-sm">
+            <form onSubmit={handlePrepareSaveTx} className="p-6 overflow-y-auto space-y-4 text-xs sm:text-sm">
               <div>
                 <label className="block font-bold text-[#23432B] mb-1">Loại chứng từ *</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -553,7 +788,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                   required
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="Ví dụ: Mua 10 cuốn 'Hoàng Tử Bé' tặng học sinh nghèo..."
+                  placeholder="Ví dụ: Mua 10 cuốn sách mới cho tủ sách CLB..."
                   className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
                 />
               </div>
@@ -573,7 +808,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 </div>
 
                 <div>
-                  <label className="block font-bold text-[#23432B] mb-1">Hạng mục chi *</label>
+                  <label className="block font-bold text-[#23432B] mb-1">Hạng mục *</label>
                   <select
                     value={newCategory}
                     onChange={(e) => setNewCategory(e.target.value as any)}
@@ -589,14 +824,25 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Người thực hiện</label>
+              {/* Ô BẮT BUỘC NGƯỜI NHẬP TỰ GÕ TÊN KÝ XÁC NHẬN */}
+              <div className="p-3.5 rounded-xl bg-emerald-50/90 border-2 border-emerald-700/40 space-y-1.5">
+                <label className="flex items-center gap-1.5 font-black text-[#1E3A24] text-xs">
+                  <PenTool className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Ký tên xác nhận người thực hiện (Tự nhập họ tên bạn) *</span>
+                </label>
                 <input
                   type="text"
-                  value={newPerformedBy}
-                  onChange={(e) => setNewPerformedBy(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
+                  required
+                  value={newSignerName}
+                  onChange={(e) => setNewSignerName(e.target.value)}
+                  placeholder="Gõ đầy đủ Họ và Tên của bạn (VD: Nguyễn Trung Nguyên)..."
+                  className="w-full px-3 py-2 rounded-xl border-2 border-emerald-700/50 bg-white text-xs font-bold text-[#1E3A24] focus:outline-none focus:border-emerald-800"
                 />
+                <p className="text-[11px] text-emerald-900/80">
+                  {editingTx
+                    ? 'Hệ thống sẽ lưu vết tên bạn vào lịch sử chỉnh sửa của phiếu này.'
+                    : 'Họ tên bạn tự nhập sẽ được ghi công khai làm người lập và chịu trách nhiệm chứng từ.'}
+                </p>
               </div>
 
               <div>
@@ -610,12 +856,12 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 />
               </div>
 
-              {/* Chụp & Đính kèm biên lai / hóa đơn */}
+              {/* Chụp & Đính kèm biên lai */}
               <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Camera className="w-4 h-4 text-amber-800" />
-                    <span className="font-bold text-xs text-amber-950">Chụp / Đính Kèm Biên Lai & Hóa Đơn Thu Chi</span>
+                    <span className="font-bold text-xs text-amber-950">Đính Kèm Biên Lai / Hóa Đơn (Nếu có)</span>
                   </div>
                   {newReceiptImage && (
                     <button
@@ -648,30 +894,17 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 />
 
                 {newReceiptImage ? (
-                  <div className="relative rounded-xl overflow-hidden border border-amber-300 max-h-48 bg-stone-900 flex items-center justify-center">
-                    <img
-                      src={newReceiptImage}
-                      alt="Receipt preview"
-                      className="max-h-48 w-full object-contain"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => receiptFileInputRef.current?.click()}
-                      className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-black/60 text-white text-[11px] font-semibold hover:bg-black/80 flex items-center gap-1"
-                    >
-                      <Camera className="w-3 h-3" />
-                      <span>Đổi ảnh khác</span>
-                    </button>
+                  <div className="relative rounded-xl overflow-hidden border border-amber-300 max-h-40 bg-stone-900 flex items-center justify-center">
+                    <img src={newReceiptImage} alt="Receipt preview" className="max-h-40 w-full object-contain" />
                   </div>
                 ) : (
                   <button
                     type="button"
                     onClick={() => receiptFileInputRef.current?.click()}
-                    className="w-full py-3 px-4 border-2 border-dashed border-amber-300 rounded-xl bg-white hover:bg-amber-50/50 flex flex-col items-center justify-center gap-1.5 transition cursor-pointer text-amber-900"
+                    className="w-full py-2.5 px-4 border-2 border-dashed border-amber-300 rounded-xl bg-white hover:bg-amber-50/50 flex flex-col items-center justify-center gap-1 transition cursor-pointer text-amber-900"
                   >
-                    <Upload className="w-5 h-5 text-amber-700" />
-                    <span className="font-bold text-xs">Chụp ảnh biên lai bằng Camera hoặc tải ảnh từ máy</span>
-                    <span className="text-[10px] text-amber-700/80">Lưu giữ chứng từ minh bạch cho BCN và nhà trường</span>
+                    <Upload className="w-4 h-4 text-amber-700" />
+                    <span className="font-bold text-xs">Chọn hoặc chụp ảnh hóa đơn đính kèm</span>
                   </button>
                 )}
               </div>
@@ -686,9 +919,9 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#23432B] hover:bg-[#1B3522] text-white font-bold bubble-3d shadow-md cursor-pointer"
+                  className="px-6 py-2.5 rounded-xl bg-[#23432B] hover:bg-[#1B3522] text-white font-bold shadow-md cursor-pointer"
                 >
-                  Lưu & Tạo Phiếu
+                  Tiếp tục xác nhận
                 </button>
               </div>
             </form>
@@ -696,7 +929,109 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       )}
 
-      {/* Lightbox Modal: View Receipt Image */}
+      {/* Hộp thoại xác nhận 2 lớp: "Bạn đã chắc chắn chưa?" */}
+      {confirmSavePayload && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#E5A140] border-2 border-[#382215] flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5 text-[#382215]" />
+              </div>
+              <div>
+                <h4 className="font-black text-base text-[#382215] font-serif-vintage">
+                  Bạn đã chắc chắn chưa?
+                </h4>
+                <p className="text-xs text-[#6E472B]">
+                  Vui lòng kiểm tra kỹ thông tin trước khi công khai lên Sổ Quỹ CLB
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-white border-2 border-[#382215] space-y-1.5 text-xs text-[#382215]">
+              <div>
+                • Loại phiếu: <strong className={confirmSavePayload.tx.type === 'income' ? 'text-[#486A39]' : 'text-[#C8532B]'}>
+                  {confirmSavePayload.tx.type === 'income' ? 'Phiếu Thu (+)' : 'Phiếu Chi (-)'}
+                </strong>
+              </div>
+              <div>• Nội dung: <strong>{confirmSavePayload.tx.title}</strong></div>
+              <div>• Số tiền: <strong className="text-sm">{formatVND(confirmSavePayload.tx.amount)}</strong></div>
+              <div>• Chữ ký xác nhận: <strong className="text-[#245351]">{confirmSavePayload.mode === 'edit' ? confirmSavePayload.tx.lastEditedBy : confirmSavePayload.tx.performedBy}</strong></div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmSavePayload(null)}
+                className="px-4 py-2 rounded-xl bg-white border-2 border-[#382215] text-[#382215] font-bold text-xs cursor-pointer hover:bg-stone-100"
+              >
+                Quay lại sửa
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmExecuteSave}
+                className="px-5 py-2 rounded-xl bg-[#245351] hover:bg-[#193B39] text-white border-2 border-[#382215] font-black text-xs cursor-pointer shadow-[2px_2px_0px_#382215]"
+              >
+                Chắc chắn, lưu phiếu ngay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Yêu cầu duyệt xóa chéo 2 chiều khi nhập lộn */}
+      {deleteTargetTx && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 border-2 border-rose-700 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-700" />
+              </div>
+              <div>
+                <h4 className="font-black text-base text-[#382215] font-serif-vintage">
+                  Đề Nghị Duyệt Xóa Phiếu Nhập Lộn
+                </h4>
+                <p className="text-xs text-[#6E472B]">
+                  Cơ chế kiểm soát chéo giữa Chủ nhiệm & Phó Chủ nhiệm
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#382215] leading-relaxed bg-white p-3 rounded-xl border border-[#382215]">
+              Phiếu <strong>"{deleteTargetTx.title}"</strong> ({formatVND(deleteTargetTx.amount)}) sẽ được chuyển sang trạng thái chờ <strong>{isPresident ? 'Phó Chủ nhiệm CLB' : 'Chủ nhiệm CLB'}</strong> xác nhận đồng ý trước khi xóa khỏi hệ thống.
+            </p>
+
+            <div>
+              <label className="block font-bold text-xs text-[#382215] mb-1">Lý do đề nghị xóa phiếu *</label>
+              <input
+                type="text"
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Ví dụ: Nhập nhầm số tiền hoặc trùng phiếu trước đó..."
+                className="w-full px-3 py-2 rounded-xl border-2 border-[#382215] bg-white text-xs"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetTx(null)}
+                className="px-4 py-2 rounded-xl bg-white border-2 border-[#382215] text-[#382215] font-bold text-xs cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleRequestCrossDelete}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white border-2 border-[#382215] font-black text-xs cursor-pointer shadow-[2px_2px_0px_#382215]"
+              >
+                Gửi yêu cầu duyệt xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal: Xem ảnh biên lai */}
       {previewReceiptTx && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="relative bg-[#FAF7F0] rounded-2xl border-2 border-emerald-600 shadow-2xl max-w-xl w-full max-h-[92vh] overflow-hidden flex flex-col">
@@ -736,7 +1071,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
             </div>
 
             <div className="p-3 bg-[#EFE9DA] border-t border-[#DED4C3] flex items-center justify-between text-xs text-[#2A4B31] shrink-0">
-              <span>Người lập: <strong>{previewReceiptTx.performedBy}</strong> ({previewReceiptTx.date})</span>
+              <span>Người lập & ký xác nhận: <strong>{previewReceiptTx.performedBy}</strong> ({previewReceiptTx.date})</span>
               <button
                 type="button"
                 onClick={() => setPreviewReceiptTx(null)}
