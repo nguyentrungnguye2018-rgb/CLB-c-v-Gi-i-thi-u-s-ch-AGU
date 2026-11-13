@@ -2009,30 +2009,6 @@ export const BcnCommandCenter: React.FC<BcnCommandCenterProps> = ({
                   className="px-3 py-2 rounded-xl bg-white border"
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1E3A24] mb-1">Số biên bản / Số văn bản *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="VD: 06/BB-CLB hoặc 12/TTr-CLB"
-                    value={planAudience}
-                    onChange={(e) => setPlanAudience(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-white border border-[#382215]/40 font-mono font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-[#1E3A24] mb-1">Năm học & Ngày phát hành *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="VD: Năm học 2026-2027 · 14/11/2026"
-                    value={planTimeline}
-                    onChange={(e) => setPlanTimeline(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-white border border-[#382215]/40 font-bold"
-                  />
-                </div>
-              </div>
               <textarea
                 rows={3}
                 value={planDesc}
