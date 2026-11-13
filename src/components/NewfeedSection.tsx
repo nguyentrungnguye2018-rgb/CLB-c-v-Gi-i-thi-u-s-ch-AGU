@@ -24,7 +24,8 @@ import {
   Compass,
   Search,
   Bell,
-  Check
+  Check,
+  Lock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Post, LocketMoment, UserProfile, AnnualTheme } from '../types';
@@ -127,6 +128,14 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   const isCheckedInToday = currentUser.lastCheckInDate === todayStr;
   const canForceDeleteAny = isPresident || isRoot || isBcnMode;
 
+  // Kiểm tra quyền bình luận & góp ý:
+  // - Tài khoản Cựu Thành Viên sinh viên thường (alumni_viewer) CHỈ ĐƯỢC XEM, KHÔNG ĐƯỢC GÓP Ý
+  // - Cựu Ban Chủ Nhiệm (former_bcn) và Thành viên đương nhiệm ĐƯỢC BÌNH LUẬN GÓP Ý
+  const isAlumniViewerOnly =
+    currentUser.clubRole === 'alumni_viewer' ||
+    (Boolean(currentUser.isGraduated) && currentUser.clubRole !== 'former_bcn' && currentUser.canComment === false);
+  const canCommentAndPost = !isAlumniViewerOnly;
+
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => {
@@ -135,7 +144,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  // State lưu bản sao mới nhất từ server để không bao giờ bị mất thông báo thả tim khi đổi tài khoản
   const [serverPostsSnapshot, setServerPostsSnapshot] = useState<any[] | null>(null);
   const [serverLocketsSnapshot, setServerLocketsSnapshot] = useState<any[] | null>(null);
   const [postLikesOverride, setPostLikesOverride] = useState<Record<string, string[]>>({});
@@ -144,7 +152,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   const [likingInProgress, setLikingInProgress] = useState<Record<string, boolean>>({});
   const [dismissedNoticeIds, setDismissedNoticeIds] = useState<string[]>([]);
 
-  // Tự động kéo dữ liệu mới nhất từ /api/state ngay khi đổi tài khoản hoặc mở trang
   useEffect(() => {
     let isMounted = true;
     const syncLatestFromServer = async () => {
@@ -167,11 +174,10 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     };
   }, [currentUser.id]);
 
-  // Hợp nhất dữ liệu từ props & snapshot mới nhất từ server
-  const effectivePosts: any[] = (serverPostsSnapshot && serverPostsSnapshot.length > 0 ? serverPostsSnapshot : posts);
-  const effectiveLockets: any[] = (serverLocketsSnapshot && serverLocketsSnapshot.length > 0 ? serverLocketsSnapshot : locketMoments);
+  const effectivePosts: any[] = serverPostsSnapshot && serverPostsSnapshot.length > 0 ? serverPostsSnapshot : posts;
+  const effectiveLockets: any[] =
+    serverLocketsSnapshot && serverLocketsSnapshot.length > 0 ? serverLocketsSnapshot : locketMoments;
 
-  // Trích xuất tất cả thông báo thả tim gắn trong bài viết & Locket dành cho người dùng hiện tại
   const myUnreadHeartNotices: {
     noticeId: string;
     targetType: 'post' | 'locket';
@@ -229,7 +235,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
   myUnreadHeartNotices.sort((a, b) => b.createdAtMs - a.createdAtMs);
 
-  // Bấm "Đã xem" trên ô thông báo thả tim -> lưu thẳng trạng thái đã xem vào bài viết/Locket trên server
   const handleMarkHeartNoticeSeen = async (item: {
     noticeId: string;
     targetType: 'post' | 'locket';
@@ -287,7 +292,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<string | null>(null);
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [commentsList, setCommentsList] = useState<Record<string, { author: string; avatar: string; text: string; time: string }[]>>({});
-
   const [floatingHearts, setFloatingHearts] = useState<{ id: number; postId: string; x: number; y: number }[]>([]);
 
   const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
@@ -300,10 +304,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     { text: "Sách là ngọn đèn bất diệt soi sáng bước đường tri thức của mỗi sinh viên.", author: "CLB Đọc và Giới thiệu sách AGU" },
     { text: "Đọc sách không chỉ là nạp kiến thức, mà là học cách lắng nghe và thấu hiểu cuộc đời.", author: "Văn hóa đọc AGU" },
     { text: "Một cuốn sách hay giống như một người bạn tri kỷ, mở ra là niềm vui, khép lại là bài học.", author: "Trần Đăng Khoa" },
-    { text: "Định vị tư duy, bản lĩnh tri thức — Mỗi ngày 15 trang sách kiến tạo nên tương lai.", author: "Bản tin E-News AGU" },
-    { text: "Không có con tàu nào đưa ta đi xa bằng một trang sách mở.", author: "Emily Dickinson" },
-    { text: "Đọc một trang sách, gieo một hạt giống nhân ái giữa lòng An Giang.", author: "Góc Sách AGU" },
-    { text: "Sách mở ra những chân trời bao la, nơi sinh viên tìm thấy ngọn lửa đam mê.", author: "Đoàn - Hội Sinh Viên AGU" }
+    { text: "Định vị tư duy, bản lĩnh tri thức — Mỗi ngày 15 trang sách kiến tạo nên tương lai.", author: "Bản tin E-News AGU" }
   ];
   const dailyQuote = DAILY_QUOTES[new Date().getDate() % DAILY_QUOTES.length];
 
@@ -415,7 +416,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     return [];
   };
 
-  // Thả tim bài viết: Cộng dồn lượt tim + Đính kèm thẳng thông báo tim vào bài viết trên server
   const triggerLike = async (e: React.MouseEvent, post: any) => {
     if (likingInProgress[post.id]) return;
 
@@ -452,7 +452,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
       setPostLikesOverride((prev) => ({ ...prev, [post.id]: nextLikedBy }));
 
-      // Đính kèm thông báo thả tim thẳng vào bài viết nếu người bấm không phải chính tác giả
       const isSelfLike =
         (targetPost.authorId && targetPost.authorId === currentUser.id) ||
         (targetPost.authorName || '').trim().toLowerCase() === currentUser.name.trim().toLowerCase();
@@ -499,7 +498,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     }
   };
 
-  // Thả tim Locket: Cộng dồn + Đính kèm thông báo tim thẳng vào Locket trên server
   const handleToggleLocketReaction = async (moment: any) => {
     if (likingInProgress[moment.id]) return;
     setLikingInProgress((prev) => ({ ...prev, [moment.id]: true }));
@@ -581,6 +579,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   };
 
   const handleAddComment = (postId: string) => {
+    if (!canCommentAndPost) return;
     const text = commentInputs[postId]?.trim();
     if (!text) return;
 
@@ -609,7 +608,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
   const handleCreatePost = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim() || !newContent.trim()) return;
+    if (!canCommentAndPost || !newTitle.trim() || !newContent.trim()) return;
 
     const nowTs = Date.now();
     const isoNow = new Date(nowTs).toISOString();
@@ -637,13 +636,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     } as any);
 
     setLocalCreatedTimestamps((prev) => ({ ...prev, [newTitle]: nowTs }));
-
-    confetti({
-      particleCount: 70,
-      spread: 60,
-      origin: { y: 0.6 }
-    });
-
     setIsPostModalOpen(false);
     setNewTitle('');
     setNewContent('');
@@ -653,7 +645,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
   const handleCreateLocket = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newLocketCaption.trim()) return;
+    if (!canCommentAndPost || !newLocketCaption.trim()) return;
 
     const nowTs = Date.now();
     const isoNow = new Date(nowTs).toISOString();
@@ -673,19 +665,13 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       heartNotices: []
     } as any);
 
-    confetti({
-      particleCount: 50,
-      spread: 50,
-      origin: { y: 0.5 }
-    });
-
     setIsLocketModalOpen(false);
     setNewLocketCaption('');
   };
 
   const handleCreateBookReview = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reviewBookTitle.trim() || !reviewContent.trim()) return;
+    if (!canCommentAndPost || !reviewBookTitle.trim() || !reviewContent.trim()) return;
 
     const nowTs = Date.now();
     const isoNow = new Date(nowTs).toISOString();
@@ -716,16 +702,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       heartNotices: []
     } as any);
 
-    if (onIncreaseReadingStreak) {
-      onIncreaseReadingStreak();
-    }
-
-    confetti({
-      particleCount: 85,
-      spread: 70,
-      origin: { y: 0.5 },
-      colors: ['#245351', '#E5A140', '#C8532B', '#FFFDF7']
-    });
+    if (onIncreaseReadingStreak) onIncreaseReadingStreak();
 
     setIsBookReviewModalOpen(false);
     setReviewBookTitle('');
@@ -746,13 +723,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
         setAt: new Date().toLocaleDateString('vi-VN')
       });
     }
-
-    confetti({
-      particleCount: 70,
-      spread: 60,
-      origin: { y: 0.3 }
-    });
-
     setIsThemeModalOpen(false);
   };
 
@@ -768,16 +738,22 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
         </div>
       ))}
 
-      {/* =========================================================================
-          Ô THÔNG BÁO NHO NHỎ KHI CÓ NGƯỜI THẢ TIM BÀI VIẾT / LOCKET CỦA BẠN
-         ========================================================================= */}
+      {/* Banner thông báo chế độ Viewer đối với Cựu Thành Viên sinh viên thường đã tốt nghiệp */}
+      {isAlumniViewerOnly && (
+        <div className="rounded-2xl p-4 border-2 border-[#245351] bg-[#EAF2EF] text-[#1E3A24] flex items-center gap-3 text-xs font-bold shadow-[3px_3px_0px_#382215]">
+          <Lock className="w-4 h-4 text-[#245351] shrink-0" />
+          <span>
+            Bạn đang truy cập bằng <strong>Tài khoản Cựu Thành Viên (Chế độ Xem - Viewer)</strong>. Bạn có thể theo dõi toàn bộ hoạt động CLB nhưng không có quyền bình luận góp ý hoặc đăng bài mới.
+          </span>
+        </div>
+      )}
+
+      {/* Ô thông báo khi có người thả tim */}
       {myUnreadHeartNotices.length > 0 && (
         <div className="rounded-2xl p-4 border-2 border-rose-700 bg-rose-50/95 shadow-[4px_4px_0px_#9F1239] space-y-2.5 animate-in slide-in-from-top-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-black text-rose-900">
-              <Bell className="w-4 h-4 text-rose-600 animate-bounce" />
-              <span>Thông báo tương tác mới ({myUnreadHeartNotices.length})</span>
-            </div>
+          <div className="flex items-center gap-2 text-xs font-black text-rose-900">
+            <Bell className="w-4 h-4 text-rose-600 animate-bounce" />
+            <span>Thông báo tương tác mới ({myUnreadHeartNotices.length})</span>
           </div>
 
           <div className="space-y-2">
@@ -821,15 +797,12 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
         <div className="lg:col-span-2 rounded-3xl p-6 sm:p-8 relative overflow-hidden bg-[#FAF3E3] border-3 border-[#382215] shadow-[6px_6px_0px_#382215] flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="relative z-10 flex-1 space-y-3.5">
             <div className="flex items-center gap-4">
-              <div className="relative group cursor-pointer">
+              <div className="relative">
                 <img
                   src="/assets/aistudio/TUYE__N_THA_NH_VIE_N_778c37b9.png"
-                  alt="Bộ ba Biểu Trưng: Trường Đại Học An Giang - Hội Sinh Viên - CLB Sách AGU"
-                  className="h-16 sm:h-20 w-auto object-contain rounded-2xl shrink-0 border-2 border-[#382215] shadow-[3px_3px_0px_#382215] bg-white/60 p-1 group-hover:scale-105 transition-transform"
+                  alt="Bộ ba Biểu Trưng"
+                  className="h-16 sm:h-20 w-auto object-contain rounded-2xl shrink-0 border-2 border-[#382215] shadow-[3px_3px_0px_#382215] bg-white/60 p-1"
                 />
-                <span className="absolute -bottom-2 -right-2 px-2 py-0.5 rounded-full bg-[#E5A140] border border-[#382215] text-[9px] font-black uppercase text-[#382215] shadow-[1px_1px_0px_#382215]">
-                  Est. 2023
-                </span>
               </div>
               <div className="space-y-0.5">
                 <div className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-[#8C3B1E] flex items-center gap-1.5">
@@ -842,7 +815,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
               </div>
             </div>
 
-            {/* Chủ đề năm */}
             <div className="p-4 rounded-2xl bg-[#F2E5C9] border-2 border-[#382215] space-y-1.5 relative shadow-[3px_3px_0px_#382215]">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-widest text-[#C8532B] flex items-center gap-1.5">
@@ -857,8 +829,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                       setThemeYearInput(annualTheme?.year || '2026 - 2027');
                       setIsThemeModalOpen(true);
                     }}
-                    className="px-2.5 py-1 rounded-lg bg-[#C8532B] hover:bg-[#A83E1B] text-white text-[10px] font-black flex items-center gap-1 cursor-pointer transition border border-[#382215] shadow-[2px_2px_0px_#382215] active:translate-x-[1px] active:translate-y-[1px]"
-                    title="Chủ nhiệm & Phó Chủ nhiệm đặt hoặc sửa Chủ đề năm của CLB"
+                    className="px-2.5 py-1 rounded-lg bg-[#C8532B] text-white text-[10px] font-black flex items-center gap-1 cursor-pointer border border-[#382215]"
                   >
                     <Edit3 className="w-3 h-3" />
                     <span>Sửa Chủ Đề Năm</span>
@@ -870,8 +841,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
               </p>
             </div>
 
-            {/* Quote of the Day */}
-            <div className="flex items-start gap-2.5 bg-[#FFFDF8] p-3.5 rounded-2xl border-2 border-[#382215]/30 text-xs text-[#382215] leading-relaxed shadow-[2px_2px_0px_#382215]">
+            <div className="flex items-start gap-2.5 bg-[#FFFDF8] p-3.5 rounded-2xl border-2 border-[#382215]/30 text-xs text-[#382215]">
               <Quote className="w-4 h-4 text-[#C8532B] shrink-0 mt-0.5" />
               <div>
                 <span className="font-serif-vintage italic text-[#4A3525]">"{dailyQuote.text}"</span>
@@ -879,59 +849,61 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
               </div>
             </div>
 
-            {/* Primary Action Buttons */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => setIsBookReviewModalOpen(true)}
-                className="px-4 py-2.5 rounded-xl bg-[#245351] hover:bg-[#1B403E] text-white text-xs font-black flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer border-2 border-[#382215] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0px_#382215] transition-all"
-              >
-                <BookMarked className="w-4 h-4 text-[#FFE29A]" />
-                <span>Viết Cảm Nhận Sách (Giữ Chuỗi 📖)</span>
-              </button>
+            {canCommentAndPost && (
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsBookReviewModalOpen(true)}
+                  className="px-4 py-2.5 rounded-xl bg-[#245351] text-white text-xs font-black flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer border-2 border-[#382215]"
+                >
+                  <BookMarked className="w-4 h-4 text-[#FFE29A]" />
+                  <span>Viết Cảm Nhận Sách (Giữ Chuỗi 📖)</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsPostModalOpen(true)}
-                className="px-3.5 py-2.5 rounded-xl bg-[#C8532B] hover:bg-[#A63E1B] text-[#FFFDF7] text-xs font-bold flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer border-2 border-[#382215] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0px_#382215] transition-all"
-              >
-                <PlusCircle className="w-4 h-4 text-[#FFE29A]" />
-                <span>Viết Bài E-News / Tản Văn</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPostModalOpen(true)}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#C8532B] text-[#FFFDF7] text-xs font-bold flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer border-2 border-[#382215]"
+                >
+                  <PlusCircle className="w-4 h-4 text-[#FFE29A]" />
+                  <span>Viết Bài E-News / Tản Văn</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsLocketModalOpen(true)}
-                className="px-3.5 py-2.5 rounded-xl bg-[#F2E5C9] hover:bg-[#EAD8B3] text-[#382215] border-2 border-[#382215] text-xs font-bold flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0px_#382215] transition-all"
-              >
-                <Camera className="w-4 h-4 text-[#C8532B]" />
-                <span>Đăng Locket (+15 Điểm)</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setIsLocketModalOpen(true)}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#F2E5C9] text-[#382215] border-2 border-[#382215] text-xs font-bold flex items-center gap-1.5 shadow-[3px_3px_0px_#382215] cursor-pointer"
+                >
+                  <Camera className="w-4 h-4 text-[#C8532B]" />
+                  <span>Đăng Locket (+15 Điểm)</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Right Side: Logged-in User Profile Card */}
+          {/* Right Side: Logged-in User Profile Card (Tài khoản Cựu Chủ nhiệm không hiển thị ảnh cá nhân) */}
           <div className="w-full md:w-56 shrink-0 rounded-3xl border-3 border-[#382215] shadow-[5px_5px_0px_#382215] bg-[#F2E5C9] p-4 text-center space-y-3">
-            <div className="relative mx-auto w-20 h-20 rounded-2xl overflow-hidden border-2.5 border-[#382215] shadow-xs">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.name}
-                className="w-full h-full object-cover"
-              />
-            </div>
+            {currentUser.clubRole !== 'former_bcn' ? (
+              <div className="relative mx-auto w-20 h-20 rounded-2xl overflow-hidden border-2.5 border-[#382215] shadow-xs">
+                <img
+                  src={currentUser.avatar}
+                  alt={currentUser.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            ) : (
+              <div className="mx-auto w-16 h-16 rounded-2xl bg-[#245351] border-2 border-[#382215] flex items-center justify-center text-[#FFE29A]">
+                <Crown className="w-8 h-8" />
+              </div>
+            )}
             <div>
               <div className="font-black text-sm text-[#382215] font-serif-vintage truncate">
                 {currentUser.name}
               </div>
-              {currentUser.nickname && (
-                <div className="text-[11px] font-bold text-[#C8532B] italic truncate">
-                  "{currentUser.nickname}"
-                </div>
-              )}
               <div className="text-[11px] text-[#6E472B] font-semibold mt-0.5">
                 {currentUser.studentId} · {currentUser.faculty}
               </div>
-              <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-lg bg-[#FAF3E3] border-2 border-[#382215] text-[10px] font-black text-[#245351] shadow-[2px_2px_0px_#382215]">
+              <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-lg bg-[#FAF3E3] border-2 border-[#382215] text-[10px] font-black text-[#245351]">
                 {currentUser.position || `Ban ${currentUser.department}`}
               </div>
             </div>
@@ -946,9 +918,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                 <Flame className="w-5 h-5 text-[#C8532B] fill-[#C8532B]" />
                 <span>Hệ Thống Chuỗi Hoạt Động</span>
               </div>
-              <span className="text-xs font-bold text-[#8C3B1E]">
-                {todayStr}
-              </span>
+              <span className="text-xs font-bold text-[#8C3B1E]">{todayStr}</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3 my-4">
@@ -958,7 +928,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                   <span>{currentUser.readingStreak}</span>
                 </div>
                 <div className="text-xs font-black text-[#382215] mt-1">Chuỗi Đọc Sách</div>
-                <div className="text-[10px] text-[#8C3B1E] font-bold mt-0.5">Viết cảm nhận sách</div>
               </div>
 
               <div className="p-4 bg-[#F2E5C9] rounded-2xl border-2 border-[#382215] text-center shadow-[3px_3px_0px_#382215]">
@@ -967,30 +936,24 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                   <span>{currentUser.enewsStreak}</span>
                 </div>
                 <div className="text-xs font-black text-[#382215] mt-1">Chuỗi Check-in</div>
-                <div className="text-[10px] text-[#245351] font-bold mt-0.5">Đăng nhập mỗi ngày</div>
               </div>
             </div>
-
-            {currentUser.meritPoints >= 100 && (
-              <div className="p-3 rounded-2xl bg-[#245351] text-[#FFE29A] text-xs font-black flex items-center justify-center gap-2 border-2 border-[#382215] shadow-[3px_3px_0px_#382215] mb-3">
-                <Crown className="w-4 h-4 text-[#FFE29A] fill-[#FFE29A]" />
-                <span>Người Siêng Năng Mạng Xã Hội 🌟 ({currentUser.meritPoints} điểm)</span>
-              </div>
-            )}
           </div>
 
           <div className="space-y-2 pt-2">
             <button
               type="button"
               onClick={onCheckIn}
-              disabled={isCheckedInToday}
+              disabled={isCheckedInToday || isAlumniViewerOnly}
               className={`w-full py-3 px-4 rounded-2xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition border-2 border-[#382215] shadow-[4px_4px_0px_#382215] ${
-                isCheckedInToday
+                isCheckedInToday || isAlumniViewerOnly
                   ? 'bg-[#E3DEC9] text-[#486A39] cursor-default'
-                  : 'bg-[#C8532B] hover:bg-[#A63E1B] text-white cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-[1px_1px_0px_#382215]'
+                  : 'bg-[#C8532B] hover:bg-[#A63E1B] text-white cursor-pointer'
               }`}
             >
-              {isCheckedInToday ? (
+              {isAlumniViewerOnly ? (
+                <span>Tài khoản Cựu Thành Viên (Chế độ Xem)</span>
+              ) : isCheckedInToday ? (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-[#486A39]" />
                   <span>Đã check-in hôm nay ({todayStr})</span>
@@ -1002,36 +965,20 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                 </>
               )}
             </button>
-            <p className="text-[11px] text-center text-[#6E472B]">
-              Đăng Locket khoảnh khắc làm việc để nhận <strong>+15 điểm cống hiến</strong>!
-            </p>
           </div>
         </div>
       </div>
 
       {/* La Bàn Tri Thức */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] space-y-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b-2 border-[#382215]/20">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#245351] border-2 border-[#382215] flex items-center justify-center text-[#FFE29A] shadow-[2px_2px_0px_#382215]">
-              <Compass className="w-5 h-5 text-[#FFE29A] animate-[spin_20s_linear_infinite]" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-black text-[#382215] text-base sm:text-lg font-serif-vintage">
-                  La Bàn Tri Thức & 5 Chiều Kích Cảm Hứng Đọc
-                </h3>
-                <span className="px-2 py-0.5 rounded-full bg-[#E5A140] border border-[#382215] text-[9px] font-black uppercase text-[#382215]">
-                  Nghệ Thuật Đọc Sách
-                </span>
-              </div>
-              <p className="text-xs text-[#6E472B]">
-                Mỗi ngày xoay la bàn định vị một chiều kích tinh thần, bồi đắp tư duy và làm giàu vốn sống sinh viên AGU
-              </p>
-            </div>
+        <div className="flex items-center gap-3 pb-3 border-b-2 border-[#382215]/20">
+          <div className="w-10 h-10 rounded-2xl bg-[#245351] border-2 border-[#382215] flex items-center justify-center text-[#FFE29A]">
+            <Compass className="w-5 h-5 text-[#FFE29A]" />
           </div>
-          <div className="text-[11px] font-bold text-[#8C3B1E] bg-[#F2E5C9] px-3 py-1.5 rounded-xl border border-[#382215] self-start md:self-auto">
-            Khơi nguồn tri thức — Văn hóa đọc AGU
+          <div>
+            <h3 className="font-black text-[#382215] text-base sm:text-lg font-serif-vintage">
+              La Bàn Tri Thức & 5 Chiều Kích Cảm Hứng Đọc
+            </h3>
           </div>
         </div>
 
@@ -1042,112 +989,52 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
               <button
                 key={mood.id}
                 type="button"
-                onClick={() => {
-                  setSelectedMoodId(mood.id);
-                  confetti({
-                    particleCount: 25,
-                    spread: 45,
-                    origin: { y: 0.6 },
-                    colors: [mood.color, '#FAF3E3', '#E5A140']
-                  });
-                }}
-                className={`p-3 rounded-2xl border-2 border-[#382215] text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
-                  isSelected
-                    ? 'shadow-[4px_4px_0px_#382215] -translate-y-0.5'
-                    : 'bg-[#FFFDF8] hover:bg-[#F2E5C9] shadow-[2px_2px_0px_#382215]'
+                onClick={() => setSelectedMoodId(mood.id)}
+                className={`p-3 rounded-2xl border-2 border-[#382215] text-left cursor-pointer flex flex-col justify-between gap-2 ${
+                  isSelected ? 'shadow-[4px_4px_0px_#382215] -translate-y-0.5' : 'bg-[#FFFDF8]'
                 }`}
-                style={{
-                  backgroundColor: isSelected ? mood.bg : undefined,
-                  borderColor: isSelected ? '#382215' : undefined
-                }}
+                style={{ backgroundColor: isSelected ? mood.bg : undefined }}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-2xl">{mood.icon}</span>
-                  {isSelected && (
-                    <span
-                      className="w-2.5 h-2.5 rounded-full border border-[#382215]"
-                      style={{ backgroundColor: mood.color }}
-                    />
-                  )}
-                </div>
-                <div className="font-black text-xs text-[#382215] leading-snug">
-                  {mood.label}
-                </div>
+                <span className="text-2xl">{mood.icon}</span>
+                <div className="font-black text-xs text-[#382215]">{mood.label}</div>
               </button>
             );
           })}
         </div>
 
         <div
-          className="p-5 sm:p-6 rounded-2xl border-2 border-[#382215] shadow-[3px_3px_0px_#382215] relative overflow-hidden transition-all duration-300"
+          className="p-5 rounded-2xl border-2 border-[#382215] space-y-1.5"
           style={{ backgroundColor: activeMood.bg }}
         >
-          <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="space-y-1.5 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{activeMood.icon}</span>
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#8C3B1E]">
-                  CHIỀU KÍCH: {activeMood.label}
-                </span>
-              </div>
-              <p className="font-serif-vintage italic text-base sm:text-lg text-[#382215] font-bold leading-relaxed">
-                "{activeMood.motto}"
-              </p>
-              <div className="flex items-center gap-1.5 text-xs text-[#245351] font-semibold pt-1">
-                <BookOpen className="w-4 h-4 shrink-0 text-[#C8532B]" />
-                <span><strong>Tác phẩm gợi ý đọc:</strong> {activeMood.recommendation}</span>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsBookReviewModalOpen(true);
-                  setReviewBookTitle(activeMood.recommendation.split('·')[0].trim());
-                }}
-                className="px-4 py-2.5 rounded-xl bg-[#245351] hover:bg-[#1B403E] text-white text-xs font-black flex items-center gap-1.5 border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer active:translate-x-[1px] active:translate-y-[1px] transition"
-              >
-                <BookMarked className="w-3.5 h-3.5 text-[#FFE29A]" />
-                <span>Viết cảm nhận sách này</span>
-              </button>
-            </div>
+          <p className="font-serif-vintage italic text-base text-[#382215] font-bold">"{activeMood.motto}"</p>
+          <div className="flex items-center gap-1.5 text-xs text-[#245351] font-semibold">
+            <BookOpen className="w-4 h-4 shrink-0 text-[#C8532B]" />
+            <span><strong>Tác phẩm gợi ý đọc:</strong> {activeMood.recommendation}</span>
           </div>
         </div>
       </div>
 
-      {/* Locket Moments Reel Section */}
+      {/* Locket Moments */}
       <div className="rounded-3xl p-6 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#F2E5C9] border-2 border-[#382215] flex items-center justify-center text-[#C8532B] shadow-[2px_2px_0px_#382215]">
-              <Camera className="w-4 h-4 text-[#C8532B]" />
-            </div>
-            <div>
-              <h3 className="font-black text-[#382215] text-sm sm:text-base font-serif-vintage">
-                Locket Moments • Kỷ Niệm Thường Nhật CLB
-              </h3>
-              <p className="text-[11px] text-[#6E472B]">
-                Những khoảnh khắc chân thực của các bạn thành viên tại Thư viện & Giảng đường AGU
-              </p>
-            </div>
+            <Camera className="w-5 h-5 text-[#C8532B]" />
+            <h3 className="font-black text-[#382215] text-sm sm:text-base font-serif-vintage">
+              Locket Moments • Kỷ Niệm Thường Nhật CLB
+            </h3>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsLocketModalOpen(true)}
-            className="text-xs font-black text-[#245351] hover:text-[#382215] flex items-center gap-1.5 bg-[#FFFDF8] hover:bg-[#F2E5C9] px-3.5 py-2 rounded-xl border-2 border-[#382215] shadow-[2px_2px_0px_#382215] active:translate-x-[1px] active:translate-y-[1px] transition cursor-pointer"
-          >
-            <PlusCircle className="w-4 h-4 text-[#C8532B]" />
-            <span>Thêm ảnh</span>
-          </button>
+          {canCommentAndPost && (
+            <button
+              type="button"
+              onClick={() => setIsLocketModalOpen(true)}
+              className="text-xs font-black text-[#245351] bg-[#FFFDF8] px-3.5 py-2 rounded-xl border-2 border-[#382215] cursor-pointer"
+            >
+              + Thêm ảnh
+            </button>
+          )}
         </div>
 
-        {effectiveLockets.length === 0 ? (
-          <div className="p-8 text-center rounded-2xl bg-[#FFFDF8] border-2 border-dashed border-[#382215]/30 text-xs font-bold text-[#6E472B]">
-            Chưa có khoảnh khắc Locket nào được đăng tải. Hãy là người đầu tiên chia sẻ khoảnh khắc đọc sách!
-          </div>
-        ) : (
-        <div className="flex items-stretch gap-4 overflow-x-auto pb-3 pt-1 scrollbar-thin">
+        <div className="flex items-stretch gap-4 overflow-x-auto pb-3 pt-1">
           {effectiveLockets.map((moment: any) => {
             const isMomentAuthor =
               (moment.authorId && moment.authorId === currentUser.id) ||
@@ -1157,24 +1044,16 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
             const reactedByList = getNormalizedLikedBy(moment, locketLikesOverride, 'reactedBy', 'reactions');
             const isReactedByMe = reactedByList.includes(currentUser.id);
             const totalReactionsCount = reactedByList.length;
-
-            const dynamicLocketTime = formatDynamicTime(
-              moment.createdTimestamp || moment.timestamp,
-              nowMs
-            );
+            const dynamicLocketTime = formatDynamicTime(moment.createdTimestamp || moment.timestamp, nowMs);
 
             return (
               <div
                 key={moment.id}
-                className="w-64 shrink-0 bg-[#FFFDF8] p-3.5 rounded-2xl border-2 border-[#382215] shadow-[4px_4px_0px_#382215] hover:shadow-[6px_6px_0px_#382215] hover:-translate-y-1 transition-all group relative flex flex-col justify-between"
+                className="w-64 shrink-0 bg-[#FFFDF8] p-3.5 rounded-2xl border-2 border-[#382215] shadow-[4px_4px_0px_#382215] relative flex flex-col justify-between"
               >
-                <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-stone-100 mb-2.5 border border-[#382215]/20">
-                  <img 
-                    src={moment.imageUrl} 
-                    alt={moment.caption} 
-                    className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
-                  />
-                  <div className="absolute top-2 left-2 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/70 backdrop-blur-sm text-white text-[10px] font-bold border border-white/20">
+                <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-stone-100 mb-2.5">
+                  <img src={moment.imageUrl} alt={moment.caption} className="w-full h-full object-cover" />
+                  <div className="absolute top-2 left-2 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/70 text-white text-[10px] font-bold">
                     <MapPin className="w-2.5 h-2.5 text-[#FFE29A]" />
                     <span className="truncate max-w-[120px]">{moment.location}</span>
                   </div>
@@ -1183,8 +1062,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                     <button
                       type="button"
                       onClick={() => onDeleteLocket(moment.id)}
-                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 hover:bg-rose-600 text-white transition cursor-pointer border border-white/20"
-                      title={isMomentAuthor ? 'Xóa ảnh của bạn' : 'Quản trị viên gỡ ảnh'}
+                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 hover:bg-rose-600 text-white cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1192,27 +1070,17 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                 </div>
 
                 <div className="space-y-2">
-                  <p className="text-xs text-[#2B1D14] font-semibold line-clamp-2 leading-relaxed">
-                    {moment.caption}
-                  </p>
-                  
+                  <p className="text-xs text-[#2B1D14] font-semibold line-clamp-2">{moment.caption}</p>
                   <div className="flex items-center justify-between pt-2 border-t border-[#382215]/15 text-[11px]">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <img 
-                        src={moment.authorAvatar} 
-                        alt={moment.authorName} 
-                        className="w-5 h-5 rounded-full object-cover border border-[#382215] shrink-0"
-                      />
                       <span className="font-bold text-[#382215] truncate">{moment.authorName}</span>
                       <span className="text-[9px] text-[#6E472B] shrink-0">({dynamicLocketTime})</span>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleToggleLocketReaction(moment)}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-black transition cursor-pointer border border-[#382215] shrink-0 ${
-                        isReactedByMe
-                          ? 'bg-rose-100 text-rose-700 shadow-2xs'
-                          : 'bg-[#FAF3E3] hover:bg-stone-100 text-stone-700'
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-black cursor-pointer border border-[#382215] ${
+                        isReactedByMe ? 'bg-rose-100 text-rose-700' : 'bg-[#FAF3E3] text-stone-700'
                       }`}
                     >
                       <Heart className={`w-3.5 h-3.5 ${isReactedByMe ? 'fill-rose-600 text-rose-600' : ''}`} />
@@ -1224,7 +1092,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
             );
           })}
         </div>
-        )}
       </div>
 
       {/* Main Feed Section */}
@@ -1235,54 +1102,35 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
             type="text"
             value={feedSearchQuery}
             onChange={(e) => setFeedSearchQuery(e.target.value)}
-            placeholder="Tra cứu bài viết, tên sách, tác giả, tản văn trong Bản tin chuỗi..."
-            className="w-full pl-10 pr-10 py-2.5 rounded-2xl bg-[#FFFDF8] border-2 border-[#382215] text-xs font-bold text-[#382215] placeholder:text-[#8C3B1E]/60 shadow-[3px_3px_0px_#382215] focus:outline-none focus:ring-2 focus:ring-[#C8532B]"
+            placeholder="Tra cứu bài viết, tên sách, tác giả..."
+            className="w-full pl-10 pr-10 py-2.5 rounded-2xl bg-[#FFFDF8] border-2 border-[#382215] text-xs font-bold text-[#382215]"
           />
-          {feedSearchQuery && (
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {categories.map((cat) => (
             <button
+              key={cat}
               type="button"
-              onClick={() => setFeedSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8C3B1E] hover:text-[#382215] cursor-pointer p-1"
-              title="Xóa tìm kiếm"
+              onClick={() => setSelectedCategory(cat)}
+              className={`px-4 py-2 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap border-2 border-[#382215] ${
+                selectedCategory === cat ? 'bg-[#245351] text-white' : 'bg-[#FFFDF8] text-[#382215]'
+              }`}
             >
-              <X className="w-4 h-4" />
+              {cat}
             </button>
-          )}
+          ))}
         </div>
 
-        {/* Category Filter Pills */}
-        <div className="flex items-center justify-between flex-wrap gap-2.5">
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer whitespace-nowrap border-2 border-[#382215] ${
-                  selectedCategory === cat
-                    ? 'bg-[#245351] text-white shadow-[3px_3px_0px_#382215]'
-                    : 'bg-[#FFFDF8] hover:bg-[#F2E5C9] text-[#382215] shadow-[2px_2px_0px_#382215]'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          <div className="text-xs text-[#5C432C] font-bold">
-            Hiển thị {filteredPosts.length} bài viết
-          </div>
-        </div>
-
-        {/* Post List */}
         <div className="space-y-6">
           {filteredPosts.map((post: any) => {
             const isBookmarked = bookmarkedPosts.includes(post.id);
-            const comments = (post.commentsList && post.commentsList.length > 0)
-              ? post.commentsList
-              : (post.comments && post.comments.length > 0)
-              ? post.comments
-              : (commentsList[post.id] || []);
+            const comments =
+              post.commentsList && post.commentsList.length > 0
+                ? post.commentsList
+                : post.comments && post.comments.length > 0
+                ? post.comments
+                : commentsList[post.id] || [];
             const isCommentsOpen = activeCommentsPostId === post.id;
 
             const isPostAuthor =
@@ -1303,27 +1151,15 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
             return (
               <article
                 key={post.id}
-                className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[5px_5px_0px_#382215] hover:shadow-[7px_7px_0px_#382215] transition-all relative space-y-4"
+                className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[5px_5px_0px_#382215] space-y-4"
               >
-                {/* Author row & category tag */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <img 
-                      src={post.authorAvatar} 
-                      alt={post.authorName} 
-                      className="w-10 h-10 rounded-xl object-cover ring-1 ring-[#5E936B]/40 shadow-2xs"
-                    />
+                    <img src={post.authorAvatar} alt={post.authorName} className="w-10 h-10 rounded-xl object-cover" />
                     <div>
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="font-bold text-xs sm:text-sm text-[#23432B]">
-                          {post.authorName}
-                        </h4>
-                        {post.authorNickname && (
-                          <span className="text-[11px] font-bold text-amber-700 italic">
-                            ({post.authorNickname})
-                          </span>
-                        )}
-                        <span className="text-[9px] font-bold px-2 py-0.2 rounded-full bg-[#E5F0E4] text-[#2C5734] border border-[#C5DDC6]">
+                        <h4 className="font-bold text-xs sm:text-sm text-[#23432B]">{post.authorName}</h4>
+                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-[#E5F0E4] text-[#2C5734]">
                           {post.authorDept}
                         </span>
                       </div>
@@ -1339,31 +1175,23 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-[#F3ECDD] text-[#765D30] border border-[#DECFB5]">
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-[#F3ECDD] text-[#765D30]">
                       {post.category}
                     </span>
                     <button
                       type="button"
                       onClick={() => toggleBookmark(post.id)}
-                      className={`p-2 rounded-xl transition cursor-pointer ${
-                        isBookmarked 
-                          ? 'bg-amber-100 text-amber-700' 
-                          : 'hover:bg-stone-200/50 text-stone-500'
-                      }`}
-                      title={isBookmarked ? 'Bỏ lưu' : 'Lưu bài viết'}
+                      className="p-2 rounded-xl text-stone-500 cursor-pointer"
                     >
-                      <Bookmark className={`w-4 h-4 ${isBookmarked ? 'fill-amber-600' : ''}`} />
+                      <Bookmark className={`w-4 h-4 ${isBookmarked ? 'fill-amber-600 text-amber-600' : ''}`} />
                     </button>
                     {canDeletePost && onDeletePost && (
                       <button
                         type="button"
                         onClick={() => {
-                          if (window.confirm(`Bạn có chắc chắn muốn xóa bài viết "${post.title}" không?`)) {
-                            onDeletePost(post.id);
-                          }
+                          if (window.confirm(`Xóa bài viết "${post.title}"?`)) onDeletePost(post.id);
                         }}
-                        className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition cursor-pointer"
-                        title={isPostAuthor ? 'Xóa bài viết của bạn' : 'Chủ nhiệm CLB gỡ bài viết'}
+                        className="p-2 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -1371,68 +1199,30 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                   </div>
                 </div>
 
-                {/* Article Header & Book Reference */}
-                <div className="space-y-2">
-                  <h3 className="text-lg sm:text-xl font-extrabold text-[#1F3A24] font-serif-vintage tracking-tight leading-snug">
-                    {post.title}
-                  </h3>
+                <h3 className="text-lg sm:text-xl font-extrabold text-[#1F3A24] font-serif-vintage">{post.title}</h3>
 
-                  {post.bookTitle && (
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-[#F0EBE0] text-[#5C4D32] text-xs font-medium border border-[#DDD3BF]">
-                      <BookOpen className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Tác phẩm: <strong>{post.bookTitle}</strong> {post.bookAuthor && `(Tác giả: ${post.bookAuthor})`}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Cover Image */}
                 {post.coverImage && (
-                  <div className="relative aspect-[21/9] sm:aspect-[24/9] rounded-2xl overflow-hidden shadow-xs border border-[#E3DAC8]">
-                    <img 
-                      src={post.coverImage} 
-                      alt={post.title} 
-                      className="w-full h-full object-cover hover:scale-102 transition duration-500"
-                    />
-                    <div className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-black/60 text-white text-[11px] backdrop-blur-xs">
-                      {post.readingTimeMinutes} phút đọc
-                    </div>
+                  <div className="relative aspect-[21/9] rounded-2xl overflow-hidden border border-[#E3DAC8]">
+                    <img src={post.coverImage} alt={post.title} className="w-full h-full object-cover" />
                   </div>
                 )}
 
-                {/* Excerpt and Content */}
-                <div className="space-y-3 text-xs sm:text-sm text-[#384C3C] font-reading leading-relaxed">
-                  <p className="italic font-serif text-[#465E4A] bg-[#F7F4EA] p-3 rounded-2xl border-l-4 border-[#5E936B]">
+                <div className="space-y-3 text-xs sm:text-sm text-[#384C3C] leading-relaxed">
+                  <p className="italic font-serif bg-[#F7F4EA] p-3 rounded-2xl border-l-4 border-[#5E936B]">
                     "{post.excerpt}"
                   </p>
-                  <p className="whitespace-pre-line text-[#2B3E2F]">
-                    {post.content}
-                  </p>
+                  <p className="whitespace-pre-line text-[#2B3E2F]">{post.content}</p>
                 </div>
 
-                {/* Tags */}
-                {post.tags && post.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {post.tags.map((tag: string, idx: number) => (
-                      <span
-                        key={idx}
-                        className="text-[11px] font-medium text-[#4D6D53] bg-[#E9F2E8] px-2.5 py-0.5 rounded-lg hover:bg-[#D8E9D7] cursor-pointer"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Interactive Footer */}
                 <div className="flex items-center justify-between pt-3 border-t border-[#E5DCBE] text-xs">
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={(e) => triggerLike(e, post)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold transition cursor-pointer ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold cursor-pointer ${
                         isLikedByMe
                           ? 'bg-rose-50 text-rose-600 border border-rose-200'
-                          : 'bg-white hover:bg-rose-50 text-stone-600 border border-[#D5CBBC]'
+                          : 'bg-white text-stone-600 border border-[#D5CBBC]'
                       }`}
                     >
                       <Heart className={`w-4 h-4 ${isLikedByMe ? 'fill-rose-500 text-rose-500' : ''}`} />
@@ -1442,7 +1232,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveCommentsPostId(isCommentsOpen ? null : post.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-stone-100 text-stone-600 border border-[#D5CBBC] font-semibold transition cursor-pointer"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white text-stone-600 border border-[#D5CBBC] font-semibold cursor-pointer"
                     >
                       <MessageCircle className="w-4 h-4 text-emerald-700" />
                       <span>{comments.length || post.commentsCount} Bình luận</span>
@@ -1451,32 +1241,21 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(window.location.href);
-                      confetti({ particleCount: 30, spread: 40, origin: { y: 0.7 } });
-                    }}
-                    className="p-1.5 rounded-lg hover:bg-stone-200/50 text-stone-500 flex items-center gap-1 cursor-pointer"
-                    title="Chia sẻ bài viết"
+                    onClick={() => navigator.clipboard?.writeText(window.location.href)}
+                    className="p-1.5 rounded-lg text-stone-500 flex items-center gap-1 cursor-pointer"
                   >
                     <Share2 className="w-4 h-4" />
                     <span className="hidden sm:inline text-xs">Chia sẻ</span>
                   </button>
                 </div>
 
-                {/* Comments Expandable Box */}
+                {/* Khung bình luận & góp ý (Khóa đối với Cựu Thành Viên Viewer) */}
                 {isCommentsOpen && (
-                  <div className="bg-[#F8F5EE] rounded-2xl p-4 border border-[#DFD6C3] space-y-3 animate-in fade-in duration-200">
-                    <h5 className="font-bold text-xs text-[#2A442F]">
-                      Thảo luận ({comments.length})
-                    </h5>
+                  <div className="bg-[#F8F5EE] rounded-2xl p-4 border border-[#DFD6C3] space-y-3">
+                    <h5 className="font-bold text-xs text-[#2A442F]">Thảo luận ({comments.length})</h5>
 
                     {comments.map((c: any, idx: number) => (
                       <div key={idx} className="flex items-start gap-2.5 text-xs">
-                        <img 
-                          src={c.avatar} 
-                          alt={c.author} 
-                          className="w-7 h-7 rounded-full object-cover ring-1 ring-[#5E936B] shrink-0 mt-0.5" 
-                        />
                         <div className="bg-white p-2.5 rounded-2xl border border-[#E3DAC8] flex-1">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-[#23432B]">{c.author}</span>
@@ -1487,28 +1266,36 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                       </div>
                     ))}
 
-                    <div className="flex items-center gap-2 pt-1">
-                      <img 
-                        src={currentUser.avatar} 
-                        alt={currentUser.name} 
-                        className="w-7 h-7 rounded-full object-cover ring-1 ring-[#5E936B] shrink-0" 
-                      />
-                      <input
-                        type="text"
-                        value={commentInputs[post.id] || ''}
-                        onChange={(e) => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
-                        onKeyDown={(e) => e.key === 'Enter' && handleAddComment(post.id)}
-                        placeholder="Để lại cảm nghĩ của bạn về bài viết..."
-                        className="flex-1 px-3 py-2 rounded-xl bg-white border border-[#D5CABB] text-xs focus:outline-none focus:ring-1 focus:ring-[#3B6E47]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleAddComment(post.id)}
-                        className="p-2 rounded-xl bg-[#3B6E47] hover:bg-[#2C5536] text-white cursor-pointer"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    {canCommentAndPost ? (
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={commentInputs[post.id] || ''}
+                          onChange={(e) => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
+                          onKeyDown={(e) => e.key === 'Enter' && handleAddComment(post.id)}
+                          placeholder={
+                            currentUser.clubRole === 'former_bcn'
+                              ? 'Góp ý chia sẻ kinh nghiệm từ Cựu Ban Chủ Nhiệm...'
+                              : 'Để lại cảm nghĩ của bạn về bài viết...'
+                          }
+                          className="flex-1 px-3 py-2 rounded-xl bg-white border border-[#D5CABB] text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddComment(post.id)}
+                          className="p-2 rounded-xl bg-[#3B6E47] text-white cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-2.5 rounded-xl bg-stone-200/80 border border-stone-300 text-[11px] font-bold text-stone-700 flex items-center gap-2">
+                        <Lock className="w-3.5 h-3.5 text-stone-600 shrink-0" />
+                        <span>
+                          Tài khoản Cựu Thành Viên (Chế độ Xem) — Chỉ Cựu Ban Chủ Nhiệm và Thành viên đương nhiệm mới có quyền bình luận góp ý.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </article>
@@ -1517,345 +1304,127 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
         </div>
       </div>
 
-      {/* Modal: Write New E-News / Essay */}
-      {isPostModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-[#FAF7F0] rounded-3xl border-2 border-[#5E936B]/50 shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      {/* Modal: Write New Post */}
+      {isPostModalOpen && canCommentAndPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="bg-[#FAF7F0] rounded-3xl border-2 border-[#5E936B]/50 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
             <div className="bg-[#26472D] text-white p-5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Feather className="w-5 h-5 text-emerald-300" />
-                <h3 className="font-bold text-base font-serif-vintage">
-                  Đăng Bài Viết E-News & Tản Văn Mới
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsPostModalOpen(false)}
-                className="p-1 rounded-lg hover:bg-white/10 text-white cursor-pointer"
-              >
+              <h3 className="font-bold text-base font-serif-vintage">Đăng Bài Viết E-News & Tản Văn Mới</h3>
+              <button type="button" onClick={() => setIsPostModalOpen(false)} className="cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleCreatePost} className="p-6 overflow-y-auto space-y-4 text-xs sm:text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-[#23432B] mb-1">Chuyên mục bài viết *</label>
-                  <select
-                    value={newCategory}
-                    onChange={(e) => setNewCategory(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                  >
-                    <option value="E-News">Bản tin E-News</option>
-                    <option value="Tản văn">Tản văn & Cảm xúc</option>
-                    <option value="Góc Sách AGU">Góc Sách AGU</option>
-                    <option value="Phóng Sự CLB">Phóng Sự Hoạt Động CLB</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#23432B] mb-1">Tags (phân cách bởi dấu phẩy)</label>
-                  <input
-                    type="text"
-                    value={newTags}
-                    onChange={(e) => setNewTags(e.target.value)}
-                    placeholder="AGU, DocSach, TriThuc..."
-                    className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Tiêu đề bài viết *</label>
-                <input
-                  type="text"
-                  required
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="Ví dụ: Đọc lại 'Chiếc Lá Cuối Cùng' giữa những ngày thi..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white font-bold text-sm focus:ring-2 focus:ring-[#3B6E47]"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-[#23432B] mb-1">Tên cuốn sách (nếu có)</label>
-                  <input
-                    type="text"
-                    value={newBookTitle}
-                    onChange={(e) => setNewBookTitle(e.target.value)}
-                    placeholder="Ví dụ: Cây Cam Ngọt Của Tôi"
-                    className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-[#23432B] mb-1">Tác giả cuốn sách</label>
-                  <input
-                    type="text"
-                    value={newBookAuthor}
-                    onChange={(e) => setNewBookAuthor(e.target.value)}
-                    placeholder="Ví dụ: José Mauro de Vasconcelos"
-                    className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block font-bold text-[#23432B]">Ảnh bìa bài viết *</label>
-                  <label className="text-xs font-bold text-[#2E5839] hover:underline flex items-center gap-1 cursor-pointer">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Tải ảnh từ máy</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          try {
-                            const b64 = await readFileAsDataUrl(file, 1200, 0.82);
-                            setNewCover(b64);
-                          } catch {
-                            // ignore invalid image
-                          }
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
-                <input
-                  type="text"
-                  value={newCover.startsWith('data:') ? 'Đã tải ảnh trực tiếp từ thiết bị ✓' : newCover}
-                  onChange={(e) => setNewCover(e.target.value)}
-                  placeholder="Dán link ảnh URL hoặc bấm Tải ảnh từ máy ở trên..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                />
-                {newCover && (
-                  <div className="mt-2 aspect-[21/9] rounded-xl overflow-hidden bg-stone-100 border border-stone-200">
-                    <img src={newCover} alt="Cover Preview" className="w-full h-full object-cover" />
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Trích đoạn nổi bật (Excerpt)</label>
-                <input
-                  type="text"
-                  value={newExcerpt}
-                  onChange={(e) => setNewExcerpt(e.target.value)}
-                  placeholder="Một câu quote hoặc dòng tóm tắt sâu sắc..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-[#3B6E47]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Nội dung chi tiết *</label>
-                <textarea
-                  rows={6}
-                  required
-                  value={newContent}
-                  onChange={(e) => setNewContent(e.target.value)}
-                  placeholder="Viết cảm nghĩ, bài điểm sách, hoặc chia sẻ góc nhìn của bạn..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white font-reading text-sm focus:ring-2 focus:ring-[#3B6E47]"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-3 border-t border-[#DFD6C3]">
-                <button
-                  type="button"
-                  onClick={() => setIsPostModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-semibold cursor-pointer"
-                >
-                  Hủy bỏ
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#2D5337] hover:bg-[#23422B] text-white font-bold bubble-3d shadow-md cursor-pointer flex items-center gap-2"
-                >
-                  <Send className="w-4 h-4 text-emerald-300" />
-                  <span>Xuất Bản Bài Viết</span>
-                </button>
-              </div>
+              <select
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value as any)}
+                className="w-full px-3 py-2 rounded-xl border bg-white text-xs"
+              >
+                <option value="E-News">Bản tin E-News</option>
+                <option value="Tản văn">Tản văn & Cảm xúc</option>
+                <option value="Góc Sách AGU">Góc Sách AGU</option>
+                <option value="Phóng Sự CLB">Phóng Sự Hoạt Động CLB</option>
+              </select>
+              <input
+                type="text"
+                required
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="Tiêu đề bài viết..."
+                className="w-full px-3 py-2 rounded-xl border bg-white font-bold"
+              />
+              <textarea
+                rows={5}
+                required
+                value={newContent}
+                onChange={(e) => setNewContent(e.target.value)}
+                placeholder="Nội dung chi tiết..."
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <button type="submit" className="px-6 py-2.5 rounded-xl bg-[#2D5337] text-white font-bold cursor-pointer">
+                Xuất Bản Bài Viết
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal: Add Locket Moment */}
-      {isLocketModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-[#FAF7F0] rounded-3xl border-2 border-amber-300 shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="bg-gradient-to-r from-amber-700 to-amber-900 text-white p-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Camera className="w-5 h-5 text-amber-200" />
-                <h3 className="font-bold text-base font-serif-vintage">
-                  Đăng Locket Khoảnh Khắc CLB
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsLocketModalOpen(false)}
-                className="p-1 rounded-lg hover:bg-white/10 text-white cursor-pointer"
-              >
+      {/* Modal: Add Locket */}
+      {isLocketModalOpen && canCommentAndPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="bg-[#FAF7F0] rounded-3xl w-full max-w-md overflow-hidden">
+            <div className="bg-amber-800 text-white p-4 flex items-center justify-between">
+              <h3 className="font-bold text-base">Đăng Locket Khoảnh Khắc CLB</h3>
+              <button type="button" onClick={() => setIsLocketModalOpen(false)} className="cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
-
-            <form onSubmit={handleCreateLocket} className="p-5 space-y-4 text-xs sm:text-sm">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block font-bold text-[#23432B]">Ảnh khoảnh khắc Locket *</label>
-                  <label className="text-xs font-bold text-amber-800 hover:underline flex items-center gap-1 cursor-pointer">
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>Chụp / Tải ảnh từ máy</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          try {
-                            const b64 = await readFileAsDataUrl(file, 900, 0.85);
-                            setNewLocketImage(b64);
-                          } catch {
-                            // ignore invalid image
-                          }
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
+            <form onSubmit={handleCreateLocket} className="p-5 space-y-4 text-xs">
+              <label className="text-xs font-bold text-amber-800 flex items-center gap-1 cursor-pointer">
+                <Camera className="w-3.5 h-3.5" />
+                <span>Chụp / Tải ảnh từ máy</span>
                 <input
-                  type="text"
-                  value={newLocketImage.startsWith('data:') ? 'Đã tải ảnh khoảnh khắc từ máy ✓' : newLocketImage}
-                  onChange={(e) => setNewLocketImage(e.target.value)}
-                  placeholder="Dán link ảnh URL hoặc bấm Chụp / Tải ảnh ở trên..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-amber-500"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const b64 = await readFileAsDataUrl(file, 900, 0.85);
+                      setNewLocketImage(b64);
+                    }
+                  }}
                 />
-                <div className="mt-2 aspect-video rounded-xl overflow-hidden bg-stone-100 border border-stone-200">
-                  <img src={newLocketImage} alt="Preview" className="w-full h-full object-cover" />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Địa điểm chụp tại AGU</label>
-                <input
-                  type="text"
-                  value={newLocketLocation}
-                  onChange={(e) => setNewLocketLocation(e.target.value)}
-                  placeholder="Ví dụ: Tầng 3 Thư viện AGU / Bờ hồ khuôn viên mới"
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#23432B] mb-1">Lời nhắn Locket *</label>
-                <textarea
-                  rows={3}
-                  required
-                  value={newLocketCaption}
-                  onChange={(e) => setNewLocketCaption(e.target.value)}
-                  placeholder="Cảm nghĩ ngắn, câu nói vui cùng đồng đội..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#C5BCAB] bg-white text-xs focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-3 border-t border-[#DFD6C3]">
-                <button
-                  type="button"
-                  onClick={() => setIsLocketModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-semibold cursor-pointer"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold bubble-3d shadow-md cursor-pointer flex items-center gap-1.5"
-                >
-                  <Send className="w-4 h-4" />
-                  <span>Đăng Locket</span>
-                </button>
-              </div>
+              </label>
+              <input
+                type="text"
+                value={newLocketLocation}
+                onChange={(e) => setNewLocketLocation(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <textarea
+                rows={3}
+                required
+                value={newLocketCaption}
+                onChange={(e) => setNewLocketCaption(e.target.value)}
+                placeholder="Lời nhắn Locket..."
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <button type="submit" className="px-5 py-2 rounded-xl bg-amber-600 text-white font-bold cursor-pointer">
+                Đăng Locket
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal: Đặt / Chỉnh Sửa Chủ Đề Năm */}
+      {/* Modal: Sửa Chủ Đề Năm */}
       {isThemeModalOpen && (
-        <div className="fixed inset-0 z-[95] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-lg w-full overflow-hidden">
-            <div className="bg-[#C8532B] text-white p-4 sm:p-5 flex items-center justify-between border-b-2 border-[#382215]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#FAF3E3] text-[#C8532B] flex items-center justify-center font-black">
-                  <Sparkles className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-[#FAF3E3] text-[#C8532B] border border-[#382215]">
-                    QUYỀN HẠN BAN CHỦ NHIỆM
-                  </span>
-                  <h3 className="font-bold text-base font-serif-vintage mt-1 text-white">
-                    Đặt & Cập Nhật Chủ Đề Năm
-                  </h3>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsThemeModalOpen(false)}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveAnnualTheme} className="p-5 space-y-4 text-xs">
-              <div className="p-3 rounded-xl bg-[#F2E5C9] border border-[#382215]/20 text-[#4A3525] leading-relaxed">
-                Chủ đề năm sẽ được <strong>cố định hiển thị trang trọng tại đầu trang web</strong> cho toàn bộ thành viên và khách truy cập câu lạc bộ cùng theo dõi và lan tỏa tinh thần.
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">
-                  1. Niên Khóa / Nhiệm Kỳ *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={themeYearInput}
-                  onChange={(e) => setThemeYearInput(e.target.value)}
-                  placeholder="Ví dụ: 2026 - 2027"
-                  className="w-full px-3.5 py-2 rounded-xl border-2 border-[#382215]/30 bg-white font-bold text-sm text-[#382215] focus:border-[#C8532B]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">
-                  2. Khẩu hiệu / Chủ đề năm chính thức của CLB *
-                </label>
-                <textarea
-                  rows={3}
-                  required
-                  value={themeTextInput}
-                  onChange={(e) => setThemeTextInput(e.target.value)}
-                  placeholder="Ví dụ: Định vị tư duy, bản lĩnh tri thức — Khơi nguồn cảm hứng đọc sinh viên AGU..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border-2 border-[#382215]/30 bg-white font-bold text-xs leading-relaxed text-[#382215] focus:border-[#C8532B]"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#382215]/15">
-                <button
-                  type="button"
-                  onClick={() => setIsThemeModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-[#F2E5C9] text-[#382215] font-bold text-xs cursor-pointer border border-[#382215]/30"
-                >
+        <div className="fixed inset-0 z-[95] bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] max-w-lg w-full p-5 space-y-4 text-xs">
+            <h3 className="font-bold text-base">Cập Nhật Chủ Đề Năm</h3>
+            <form onSubmit={handleSaveAnnualTheme} className="space-y-3">
+              <input
+                type="text"
+                required
+                value={themeYearInput}
+                onChange={(e) => setThemeYearInput(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border bg-white font-bold"
+              />
+              <textarea
+                rows={3}
+                required
+                value={themeTextInput}
+                onChange={(e) => setThemeTextInput(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setIsThemeModalOpen(false)} className="px-4 py-2 rounded-xl bg-stone-200">
                   Hủy
                 </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#C8532B] hover:bg-[#A83E1B] text-white font-black text-xs cursor-pointer shadow-[2px_2px_0px_#382215] border border-[#382215]"
-                >
-                  Lưu & Cố Định Chủ Đề Năm
+                <button type="submit" className="px-5 py-2 rounded-xl bg-[#C8532B] text-white font-bold">
+                  Lưu Chủ Đề
                 </button>
               </div>
             </form>
@@ -1864,121 +1433,48 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       )}
 
       {/* Modal: Viết Cảm Nhận Sách */}
-      {isBookReviewModalOpen && (
-        <div className="fixed inset-0 z-[95] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-lg w-full max-h-[92vh] overflow-y-auto">
-            <div className="bg-[#245351] text-white p-4 sm:p-5 flex items-center justify-between border-b-2 border-[#382215]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#FFE29A] text-[#245351] flex items-center justify-center font-black">
-                  <BookMarked className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-[#FAF3E3] text-[#245351] border border-[#382215]">
-                    GIỮ CHUỖI ĐỌC SÁCH THỰC THỤ
-                  </span>
-                  <h3 className="font-bold text-base font-serif-vintage mt-1 text-white">
-                    Viết Cảm Nhận Sách Hôm Nay
-                  </h3>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsBookReviewModalOpen(false)}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateBookReview} className="p-5 space-y-3.5 text-xs">
-              <div className="p-3 rounded-xl bg-[#F2E5C9] border border-[#382215]/20 text-[#382215] leading-relaxed">
-                <strong>Quy định giữ chuỗi:</strong> Bạn cần đọc sách (tối thiểu 15 trang/ngày), ghi rõ trang đã đọc và đúc kết được điều gì. Khi gửi bài viết, bạn sẽ được <strong>+1 ngày Chuỗi Đọc Sách</strong> và nhận <strong>+25 điểm cống hiến</strong>!
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-[#382215] mb-1">
-                    Tên Cuốn Sách *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={reviewBookTitle}
-                    onChange={(e) => setReviewBookTitle(e.target.value)}
-                    placeholder="Ví dụ: Cây Cam Ngọt Của Tôi..."
-                    className="w-full px-3 py-2 rounded-xl border border-[#382215]/30 bg-white font-bold text-xs text-[#382215]"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-[#382215] mb-1">
-                    Tác Giả
-                  </label>
-                  <input
-                    type="text"
-                    value={reviewBookAuthor}
-                    onChange={(e) => setReviewBookAuthor(e.target.value)}
-                    placeholder="Ví dụ: José Mauro de Vasconcelos"
-                    className="w-full px-3 py-2 rounded-xl border border-[#382215]/30 bg-white font-medium text-xs text-[#382215]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">
-                  Hôm nay bạn đọc từ trang nào đến trang nào? *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={reviewPagesRead}
-                  onChange={(e) => setReviewPagesRead(e.target.value)}
-                  placeholder="Ví dụ: Từ trang 45 đến trang 85 (40 trang)"
-                  className="w-full px-3 py-2 rounded-xl border border-[#382215]/30 bg-white font-bold text-xs text-[#245351]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">
-                  Đúc kết / Bài học tâm đắc nhất bạn rút ra từ những trang này? *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={reviewTakeaway}
-                  onChange={(e) => setReviewTakeaway(e.target.value)}
-                  placeholder="Ví dụ: Sự kiên nhẫn và lòng thấu cảm có thể chữa lành những vết thương vô hình..."
-                  className="w-full px-3 py-2 rounded-xl border border-[#382215]/30 bg-white font-semibold text-xs text-[#8C3B1E]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">
-                  Cảm nghĩ & Phân tích chi tiết *
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  value={reviewContent}
-                  onChange={(e) => setReviewContent(e.target.value)}
-                  placeholder="Nêu cảm nhận của bạn về nhân vật, chi tiết ấn tượng, hoặc câu nói nào chạm tới cảm xúc của bạn..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[#382215]/30 bg-white font-medium text-xs leading-relaxed text-[#382215]"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#382215]/15">
-                <button
-                  type="button"
-                  onClick={() => setIsBookReviewModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-[#F2E5C9] text-[#382215] font-bold text-xs cursor-pointer border border-[#382215]/30"
-                >
+      {isBookReviewModalOpen && canCommentAndPost && (
+        <div className="fixed inset-0 z-[95] bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] max-w-lg w-full p-5 space-y-3.5 text-xs">
+            <h3 className="font-bold text-base">Viết Cảm Nhận Sách Hôm Nay</h3>
+            <form onSubmit={handleCreateBookReview} className="space-y-3">
+              <input
+                type="text"
+                required
+                value={reviewBookTitle}
+                onChange={(e) => setReviewBookTitle(e.target.value)}
+                placeholder="Tên cuốn sách..."
+                className="w-full px-3 py-2 rounded-xl border bg-white font-bold"
+              />
+              <input
+                type="text"
+                required
+                value={reviewPagesRead}
+                onChange={(e) => setReviewPagesRead(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <input
+                type="text"
+                required
+                value={reviewTakeaway}
+                onChange={(e) => setReviewTakeaway(e.target.value)}
+                placeholder="Bài học tâm đắc..."
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <textarea
+                rows={4}
+                required
+                value={reviewContent}
+                onChange={(e) => setReviewContent(e.target.value)}
+                placeholder="Cảm nghĩ chi tiết..."
+                className="w-full px-3 py-2 rounded-xl border bg-white"
+              />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setIsBookReviewModalOpen(false)} className="px-4 py-2 rounded-xl bg-stone-200">
                   Hủy
                 </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-[#245351] hover:bg-[#1B403E] text-white font-black text-xs cursor-pointer shadow-[2px_2px_0px_#382215] border border-[#382215] flex items-center gap-1.5"
-                >
-                  <BookOpen className="w-4 h-4 text-[#FFE29A]" />
-                  <span>Hoàn Tất & Tăng Chuỗi Đọc Sách (+1)</span>
+                <button type="submit" className="px-5 py-2 rounded-xl bg-[#245351] text-white font-bold">
+                  Hoàn Tất
                 </button>
               </div>
             </form>
