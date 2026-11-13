@@ -49,19 +49,14 @@ interface NewfeedSectionProps {
   onAddComment?: (postId: string, comment: { author: string; avatar: string; text: string; time: string }) => void;
 }
 
-interface HeartNotificationItem {
+interface EmbeddedHeartNotice {
   id: string;
-  recipientId: string;
-  recipientName: string;
+  senderId: string;
   senderName: string;
-  senderAvatar?: string;
-  itemTitle: string;
-  itemKind: 'bài viết' | 'khoảnh khắc Locket';
   createdAtMs: number;
   seenByIds: string[];
 }
 
-// Hàm chuyển đổi mốc thời gian thành chuỗi đếm tiến trực tiếp (Vừa xong -> X giây/phút/giờ/ngày trước + ngày giờ gốc)
 const formatDynamicTime = (rawTime: string | number | undefined, nowMs: number): string => {
   if (!rawTime || rawTime === 'Vừa đăng') return 'Vừa xong';
 
@@ -132,7 +127,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   const isCheckedInToday = currentUser.lastCheckInDate === todayStr;
   const canForceDeleteAny = isPresident || isRoot || isBcnMode;
 
-  // Đồng hồ đếm tiến cập nhật mỗi 10 giây
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => {
@@ -141,61 +135,148 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  // State đồng bộ danh sách người thả tim & hộp thông báo thả tim
+  // State lưu bản sao mới nhất từ server để không bao giờ bị mất thông báo thả tim khi đổi tài khoản
+  const [serverPostsSnapshot, setServerPostsSnapshot] = useState<any[] | null>(null);
+  const [serverLocketsSnapshot, setServerLocketsSnapshot] = useState<any[] | null>(null);
   const [postLikesOverride, setPostLikesOverride] = useState<Record<string, string[]>>({});
   const [locketLikesOverride, setLocketLikesOverride] = useState<Record<string, string[]>>({});
   const [localCreatedTimestamps, setLocalCreatedTimestamps] = useState<Record<string, number>>({});
   const [likingInProgress, setLikingInProgress] = useState<Record<string, boolean>>({});
-  const [heartNotifications, setHeartNotifications] = useState<HeartNotificationItem[]>([]);
+  const [dismissedNoticeIds, setDismissedNoticeIds] = useState<string[]>([]);
 
-  // Tải danh sách thông báo thả tim từ server để hiển thị ô thông báo cho người được tim
+  // Tự động kéo dữ liệu mới nhất từ /api/state ngay khi đổi tài khoản hoặc mở trang
   useEffect(() => {
     let isMounted = true;
-    const fetchHeartNotifications = async () => {
+    const syncLatestFromServer = async () => {
       try {
         const res = await fetch('/api/state');
         if (!res.ok) return;
         const data = await res.json();
-        if (isMounted && Array.isArray(data.heartNotifications)) {
-          setHeartNotifications(data.heartNotifications);
-        }
+        if (!isMounted) return;
+        if (Array.isArray(data.posts)) setServerPostsSnapshot(data.posts);
+        if (Array.isArray(data.locketMoments)) setServerLocketsSnapshot(data.locketMoments);
       } catch {
-        // ignore network error
+        // ignore
       }
     };
-    fetchHeartNotifications();
-    const poll = setInterval(fetchHeartNotifications, 15000);
+    syncLatestFromServer();
+    const poll = setInterval(syncLatestFromServer, 12000);
     return () => {
       isMounted = false;
       clearInterval(poll);
     };
-  }, []);
+  }, [currentUser.id]);
 
-  // Lọc ra các thông báo thả tim dành riêng cho tài khoản đang đăng nhập mà chưa bấm "Đã xem"
-  const myUnreadHeartNotices = heartNotifications.filter((n) => {
-    const isForMe =
-      (n.recipientId && n.recipientId === currentUser.id) ||
-      n.recipientName.trim().toLowerCase() === currentUser.name.trim().toLowerCase();
-    const isNotSeenYet = !Array.isArray(n.seenByIds) || !n.seenByIds.includes(currentUser.id);
-    return isForMe && isNotSeenYet;
+  // Hợp nhất dữ liệu từ props & snapshot mới nhất từ server
+  const effectivePosts: any[] = (serverPostsSnapshot && serverPostsSnapshot.length > 0 ? serverPostsSnapshot : posts);
+  const effectiveLockets: any[] = (serverLocketsSnapshot && serverLocketsSnapshot.length > 0 ? serverLocketsSnapshot : locketMoments);
+
+  // Trích xuất tất cả thông báo thả tim gắn trong bài viết & Locket dành cho người dùng hiện tại
+  const myUnreadHeartNotices: {
+    noticeId: string;
+    targetType: 'post' | 'locket';
+    targetId: string;
+    senderName: string;
+    itemTitle: string;
+    createdAtMs: number;
+  }[] = [];
+
+  effectivePosts.forEach((p: any) => {
+    const isMine =
+      (p.authorId && p.authorId === currentUser.id) ||
+      (p.authorName || '').trim().toLowerCase() === currentUser.name.trim().toLowerCase();
+    if (!isMine || !Array.isArray(p.heartNotices)) return;
+
+    p.heartNotices.forEach((n: EmbeddedHeartNotice) => {
+      const alreadySeen =
+        dismissedNoticeIds.includes(n.id) ||
+        (Array.isArray(n.seenByIds) && n.seenByIds.includes(currentUser.id));
+      if (!alreadySeen) {
+        myUnreadHeartNotices.push({
+          noticeId: n.id,
+          targetType: 'post',
+          targetId: p.id,
+          senderName: n.senderName,
+          itemTitle: p.title,
+          createdAtMs: n.createdAtMs
+        });
+      }
+    });
   });
 
-  // Bấm nút "Đã xem" trên ô thông báo thả tim
-  const handleMarkHeartNoticeSeen = async (noticeId: string) => {
-    const updatedList = heartNotifications.map((n) =>
-      n.id === noticeId
-        ? { ...n, seenByIds: Array.from(new Set([...(n.seenByIds || []), currentUser.id])) }
-        : n
-    );
-    setHeartNotifications(updatedList);
+  effectiveLockets.forEach((m: any) => {
+    const isMine =
+      (m.authorId && m.authorId === currentUser.id) ||
+      (m.authorName || '').trim().toLowerCase() === currentUser.name.trim().toLowerCase();
+    if (!isMine || !Array.isArray(m.heartNotices)) return;
+
+    m.heartNotices.forEach((n: EmbeddedHeartNotice) => {
+      const alreadySeen =
+        dismissedNoticeIds.includes(n.id) ||
+        (Array.isArray(n.seenByIds) && n.seenByIds.includes(currentUser.id));
+      if (!alreadySeen) {
+        myUnreadHeartNotices.push({
+          noticeId: n.id,
+          targetType: 'locket',
+          targetId: m.id,
+          senderName: n.senderName,
+          itemTitle: m.caption,
+          createdAtMs: n.createdAtMs
+        });
+      }
+    });
+  });
+
+  myUnreadHeartNotices.sort((a, b) => b.createdAtMs - a.createdAtMs);
+
+  // Bấm "Đã xem" trên ô thông báo thả tim -> lưu thẳng trạng thái đã xem vào bài viết/Locket trên server
+  const handleMarkHeartNoticeSeen = async (item: {
+    noticeId: string;
+    targetType: 'post' | 'locket';
+    targetId: string;
+  }) => {
+    setDismissedNoticeIds((prev) => [...prev, item.noticeId]);
+
     try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'heartNotifications', data: updatedList })
-      });
+      if (item.targetType === 'post') {
+        const updatedPosts = effectivePosts.map((p: any) => {
+          if (p.id !== item.targetId || !Array.isArray(p.heartNotices)) return p;
+          return {
+            ...p,
+            heartNotices: p.heartNotices.map((n: EmbeddedHeartNotice) =>
+              n.id === item.noticeId
+                ? { ...n, seenByIds: Array.from(new Set([...(n.seenByIds || []), currentUser.id])) }
+                : n
+            )
+          };
+        });
+        setServerPostsSnapshot(updatedPosts);
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'posts', data: updatedPosts })
+        });
+      } else {
+        const updatedLockets = effectiveLockets.map((m: any) => {
+          if (m.id !== item.targetId || !Array.isArray(m.heartNotices)) return m;
+          return {
+            ...m,
+            heartNotices: m.heartNotices.map((n: EmbeddedHeartNotice) =>
+              n.id === item.noticeId
+                ? { ...n, seenByIds: Array.from(new Set([...(n.seenByIds || []), currentUser.id])) }
+                : n
+            )
+          };
+        });
+        setServerLocketsSnapshot(updatedLockets);
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'locketMoments', data: updatedLockets })
+        });
+      }
     } catch (err) {
-      console.error('Lỗi cập nhật trạng thái đã xem thông báo tim:', err);
+      console.error('Lỗi cập nhật đã xem thông báo tim:', err);
     }
   };
 
@@ -299,7 +380,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
   const [feedSearchQuery, setFeedSearchQuery] = useState('');
   const categories = ['Tất cả', 'Cảm Nhận Sách', 'E-News', 'Tản văn', 'Góc Sách AGU', 'Phóng Sự CLB'];
 
-  const filteredPosts = posts.filter(p => {
+  const filteredPosts = effectivePosts.filter(p => {
     const matchesCategory = selectedCategory === 'Tất cả' || p.category === selectedCategory;
     if (!matchesCategory) return false;
     if (!feedSearchQuery.trim()) return true;
@@ -311,57 +392,9 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       p.content.toLowerCase().includes(q) ||
       p.excerpt.toLowerCase().includes(q) ||
       p.authorName.toLowerCase().includes(q) ||
-      (p.tags && p.tags.some(t => t.toLowerCase().includes(q)))
+      (p.tags && p.tags.some((t: string) => t.toLowerCase().includes(q)))
     );
   });
-
-  // Lưu thông báo thả tim vào hệ thống để hiển thị trong ô thông báo của người được tim
-  const notifyAuthorOnHeart = async (params: {
-    targetAuthorId?: string;
-    targetAuthorName: string;
-    itemTitle: string;
-    itemKind: 'bài viết' | 'khoảnh khắc Locket';
-  }) => {
-    if (
-      (params.targetAuthorId && params.targetAuthorId === currentUser.id) ||
-      params.targetAuthorName.trim().toLowerCase() === currentUser.name.trim().toLowerCase()
-    ) {
-      return;
-    }
-
-    const newNotice: HeartNotificationItem = {
-      id: `heart_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      recipientId: params.targetAuthorId || '',
-      recipientName: params.targetAuthorName,
-      senderName: currentUser.name,
-      senderAvatar: currentUser.avatar,
-      itemTitle: params.itemTitle,
-      itemKind: params.itemKind,
-      createdAtMs: Date.now(),
-      seenByIds: []
-    };
-
-    try {
-      let currentNotices: HeartNotificationItem[] = heartNotifications;
-      const stateRes = await fetch('/api/state');
-      if (stateRes.ok) {
-        const stateData = await stateRes.json();
-        if (Array.isArray(stateData.heartNotifications)) {
-          currentNotices = stateData.heartNotifications;
-        }
-      }
-      const nextNotices = [newNotice, ...currentNotices].slice(0, 60);
-      setHeartNotifications(nextNotices);
-
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'heartNotifications', data: nextNotices })
-      });
-    } catch (err) {
-      console.error('Lỗi lưu thông báo thả tim:', err);
-    }
-  };
 
   const getNormalizedLikedBy = (
     item: any,
@@ -382,7 +415,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     return [];
   };
 
-  // Thả tim bài viết cộng dồn & gửi thông báo cho tác giả
+  // Thả tim bài viết: Cộng dồn lượt tim + Đính kèm thẳng thông báo tim vào bài viết trên server
   const triggerLike = async (e: React.MouseEvent, post: any) => {
     if (likingInProgress[post.id]) return;
 
@@ -396,7 +429,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
     setLikingInProgress((prev) => ({ ...prev, [post.id]: true }));
 
     try {
-      let latestPosts: any[] = posts;
+      let latestPosts: any[] = effectivePosts;
       try {
         const stateRes = await fetch('/api/state');
         if (stateRes.ok) {
@@ -419,43 +452,60 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
       setPostLikesOverride((prev) => ({ ...prev, [post.id]: nextLikedBy }));
 
+      // Đính kèm thông báo thả tim thẳng vào bài viết nếu người bấm không phải chính tác giả
+      const isSelfLike =
+        (targetPost.authorId && targetPost.authorId === currentUser.id) ||
+        (targetPost.authorName || '').trim().toLowerCase() === currentUser.name.trim().toLowerCase();
+
+      const existingNotices: EmbeddedHeartNotice[] = Array.isArray(targetPost.heartNotices)
+        ? targetPost.heartNotices
+        : [];
+
+      let nextNotices = existingNotices;
+      if (!alreadyLiked && !isSelfLike) {
+        const newNotice: EmbeddedHeartNotice = {
+          id: `hn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          senderId: currentUser.id,
+          senderName: currentUser.name,
+          createdAtMs: Date.now(),
+          seenByIds: []
+        };
+        nextNotices = [newNotice, ...existingNotices.filter((n) => n.senderId !== currentUser.id)];
+      } else if (alreadyLiked) {
+        nextNotices = existingNotices.filter((n) => n.senderId !== currentUser.id);
+      }
+
       const updatedPosts = latestPosts.map((p: any) =>
         p.id === post.id
           ? {
               ...p,
               likedBy: nextLikedBy,
               likes: nextLikedBy.length,
-              userLiked: !alreadyLiked
+              userLiked: !alreadyLiked,
+              heartNotices: nextNotices
             }
           : p
       );
+
+      setServerPostsSnapshot(updatedPosts);
 
       await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: 'posts', data: updatedPosts })
       });
-
-      if (!alreadyLiked) {
-        await notifyAuthorOnHeart({
-          targetAuthorId: targetPost.authorId,
-          targetAuthorName: targetPost.authorName,
-          itemTitle: targetPost.title,
-          itemKind: 'bài viết'
-        });
-      }
     } finally {
       setLikingInProgress((prev) => ({ ...prev, [post.id]: false }));
     }
   };
 
-  // Thả tim Locket cộng dồn & gửi thông báo
+  // Thả tim Locket: Cộng dồn + Đính kèm thông báo tim thẳng vào Locket trên server
   const handleToggleLocketReaction = async (moment: any) => {
     if (likingInProgress[moment.id]) return;
     setLikingInProgress((prev) => ({ ...prev, [moment.id]: true }));
 
     try {
-      let latestLockets: any[] = locketMoments;
+      let latestLockets: any[] = effectiveLockets;
       try {
         const stateRes = await fetch('/api/state');
         if (stateRes.ok) {
@@ -478,31 +528,47 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
       setLocketLikesOverride((prev) => ({ ...prev, [moment.id]: nextReactedBy }));
 
+      const isSelfReact =
+        (targetMoment.authorId && targetMoment.authorId === currentUser.id) ||
+        (targetMoment.authorName || '').trim().toLowerCase() === currentUser.name.trim().toLowerCase();
+
+      const existingNotices: EmbeddedHeartNotice[] = Array.isArray(targetMoment.heartNotices)
+        ? targetMoment.heartNotices
+        : [];
+
+      let nextNotices = existingNotices;
+      if (!alreadyReacted && !isSelfReact) {
+        const newNotice: EmbeddedHeartNotice = {
+          id: `hn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          senderId: currentUser.id,
+          senderName: currentUser.name,
+          createdAtMs: Date.now(),
+          seenByIds: []
+        };
+        nextNotices = [newNotice, ...existingNotices.filter((n) => n.senderId !== currentUser.id)];
+      } else if (alreadyReacted) {
+        nextNotices = existingNotices.filter((n) => n.senderId !== currentUser.id);
+      }
+
       const updatedLockets = latestLockets.map((m: any) =>
         m.id === moment.id
           ? {
               ...m,
               reactedBy: nextReactedBy,
               reactions: nextReactedBy.length,
-              userReacted: !alreadyReacted
+              userReacted: !alreadyReacted,
+              heartNotices: nextNotices
             }
           : m
       );
+
+      setServerLocketsSnapshot(updatedLockets);
 
       await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: 'locketMoments', data: updatedLockets })
       });
-
-      if (!alreadyReacted) {
-        await notifyAuthorOnHeart({
-          targetAuthorId: targetMoment.authorId,
-          targetAuthorName: targetMoment.authorName,
-          itemTitle: targetMoment.caption,
-          itemKind: 'khoảnh khắc Locket'
-        });
-      }
     } finally {
       setLikingInProgress((prev) => ({ ...prev, [moment.id]: false }));
     }
@@ -566,7 +632,8 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       createdAt: isoNow,
       createdTimestamp: nowTs,
       likedBy: [],
-      likes: 0
+      likes: 0,
+      heartNotices: []
     } as any);
 
     setLocalCreatedTimestamps((prev) => ({ ...prev, [newTitle]: nowTs }));
@@ -602,7 +669,8 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       timestamp: isoNow,
       createdTimestamp: nowTs,
       reactedBy: [],
-      reactions: 0
+      reactions: 0,
+      heartNotices: []
     } as any);
 
     confetti({
@@ -644,7 +712,8 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
       createdAt: isoNow,
       createdTimestamp: nowTs,
       likedBy: [],
-      likes: 0
+      likes: 0,
+      heartNotices: []
     } as any);
 
     if (onIncreaseReadingStreak) {
@@ -714,7 +783,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
           <div className="space-y-2">
             {myUnreadHeartNotices.map((notice) => (
               <div
-                key={notice.id}
+                key={notice.noticeId}
                 className="p-3 rounded-xl bg-white border border-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -723,7 +792,8 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
                   </div>
                   <div className="min-w-0">
                     <p className="text-[#382215] font-medium leading-snug">
-                      <strong className="text-rose-700">{notice.senderName}</strong> đã thả tim {notice.itemKind}{' '}
+                      <strong className="text-rose-700">{notice.senderName}</strong> đã thả tim{' '}
+                      {notice.targetType === 'post' ? 'bài viết' : 'khoảnh khắc Locket'}{' '}
                       <strong>"{notice.itemTitle}"</strong> của bạn
                     </p>
                     <span className="text-[10px] text-[#6E472B] font-semibold">
@@ -734,7 +804,7 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => handleMarkHeartNoticeSeen(notice.id)}
+                  onClick={() => handleMarkHeartNoticeSeen(notice)}
                   className="px-3.5 py-1.5 rounded-xl bg-[#245351] hover:bg-[#193B39] text-white font-black text-[11px] flex items-center gap-1 self-end sm:self-center shrink-0 cursor-pointer shadow-[2px_2px_0px_#382215] border border-[#382215]"
                 >
                   <Check className="w-3.5 h-3.5 text-[#FFE29A]" />
@@ -1072,13 +1142,13 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
           </button>
         </div>
 
-        {locketMoments.length === 0 ? (
+        {effectiveLockets.length === 0 ? (
           <div className="p-8 text-center rounded-2xl bg-[#FFFDF8] border-2 border-dashed border-[#382215]/30 text-xs font-bold text-[#6E472B]">
             Chưa có khoảnh khắc Locket nào được đăng tải. Hãy là người đầu tiên chia sẻ khoảnh khắc đọc sách!
           </div>
         ) : (
         <div className="flex items-stretch gap-4 overflow-x-auto pb-3 pt-1 scrollbar-thin">
-          {locketMoments.map((moment: any) => {
+          {effectiveLockets.map((moment: any) => {
             const isMomentAuthor =
               (moment.authorId && moment.authorId === currentUser.id) ||
               moment.authorName.trim().toLowerCase() === currentUser.name.trim().toLowerCase();
@@ -1224,7 +1294,6 @@ export const NewfeedSection: React.FC<NewfeedSectionProps> = ({
             const isLikedByMe = likedByList.includes(currentUser.id);
             const totalLikesCount = likedByList.length;
 
-            // Xử lý cả trường hợp bài cũ bị lưu chuỗi "Vừa đăng" -> tự động lấy mốc timestamp nếu có
             const rawTimestamp =
               post.createdTimestamp ||
               localCreatedTimestamps[post.title] ||
