@@ -68,13 +68,17 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
   const [deletedIdsLocal, setDeletedIdsLocal] = useState<string[]>([]);
   const [toastBanner, setToastBanner] = useState<string | null>(null);
 
-  // Phân quyền Chủ nhiệm, Phó Chủ nhiệm & Tài khoản Chính CLB
+  // Phân quyền Chủ nhiệm, Phó Chủ nhiệm & Tài khoản Chính CLB (KHÓA THU CHI ĐỐI VỚI HỘI SINH VIÊN TRƯỜNG)
+  const isHsvSupervisor =
+    currentUser.clubRole === 'hsv_supervisor' ||
+    currentUser.adminType === 'hsv_supervisor';
   const isRoot = isMasterRootUser(currentUser);
-  const isPresident = isClubPresidentUser(currentUser) || isRoot || isBcnMode;
+  const isPresident = !isHsvSupervisor && (isClubPresidentUser(currentUser) || isRoot || isBcnMode);
   const isVicePresident =
-    isClubVicePresidentUser(currentUser) ||
-    (currentUser.position || '').toLowerCase().includes('phó chủ nhiệm');
-  const canManageFund = isPresident || isVicePresident;
+    !isHsvSupervisor &&
+    (isClubVicePresidentUser(currentUser) ||
+      (currentUser.position || '').toLowerCase().includes('phó chủ nhiệm'));
+  const canManageFund = !isHsvSupervisor && (isPresident || isVicePresident);
 
   const formatVND = (num: number) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(num);
@@ -480,7 +484,11 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
           ) : (
             <div className="px-4 py-2 rounded-xl bg-[#F2E5C9] border-2 border-[#382215] text-[#382215] text-xs font-black flex items-center gap-1.5 shadow-[2px_2px_0px_#382215]">
               <ShieldCheck className="w-4 h-4 text-[#245351]" />
-              <span>Chế độ: Thành viên quan sát & đối soát</span>
+              <span>
+                {isHsvSupervisor
+                  ? 'Chế độ: Hội Sinh Viên Giám Sát (Chỉ xem)'
+                  : 'Chế độ: Thành viên quan sát & đối soát'}
+              </span>
             </div>
           )}
         </div>
@@ -549,7 +557,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       </div>
 
-      {/* Cán Cân Ngân Sách (ĐÃ SỬA ĐÚNG CHIỀU VẬT LÝ THU - CHI) */}
+      {/* Cán Cân Ngân Sách */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] flex flex-col lg:flex-row items-center justify-between gap-6">
         <div className="space-y-2 max-w-lg">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E5A140] text-[#382215] text-[11px] font-black uppercase border border-[#382215]">
@@ -584,18 +592,15 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
               <polygon points="100,60 85,115 115,115" fill="#382215" stroke="#245351" strokeWidth="2" />
               <circle cx="100" cy="60" r="6" fill="#E5A140" stroke="#382215" strokeWidth="2" />
               {(() => {
-                // Đảo dấu chuẩn vật lý: Thu lớn hơn (totalIncome > totalExpense) => góc âm => Đĩa Thu bên trái hạ thấp xuống
                 const diff = totalExpense - totalIncome;
                 const total = totalIncome + totalExpense || 1;
                 const tilt = Math.max(-12, Math.min(12, (diff / total) * 15));
                 return (
                   <g transform={`rotate(${tilt}, 100, 60)`} className="transition-transform duration-700">
                     <line x1="20" y1="60" x2="180" y2="60" stroke="#382215" strokeWidth="5" strokeLinecap="round" />
-                    {/* Đĩa trái: Thu vào */}
                     <line x1="30" y1="60" x2="20" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <line x1="30" y1="60" x2="40" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <ellipse cx="30" cy="92" rx="22" ry="6" fill="#486A39" stroke="#382215" strokeWidth="2" />
-                    {/* Đĩa phải: Chi ra */}
                     <line x1="170" y1="60" x2="160" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <line x1="170" y1="60" x2="180" y2="90" stroke="#382215" strokeWidth="1.5" />
                     <ellipse cx="170" cy="92" rx="22" ry="6" fill="#C8532B" stroke="#382215" strokeWidth="2" />
@@ -703,6 +708,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
           {filteredList.map((tx) => {
             const pendingDelete = tx.pendingDelete;
             const canApproveDelete =
+              canManageFund &&
               pendingDelete &&
               pendingDelete.requestedById !== currentUser.id &&
               ((pendingDelete.waitingForRole === 'president' && isPresident) ||
@@ -863,7 +869,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
       </div>
 
       {/* Modal: Tạo mới / Chỉnh sửa Phiếu Thu Chi */}
-      {isModalOpen && (
+      {isModalOpen && canManageFund && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-[#FAF7F0] rounded-2xl border-2 border-[#382215] shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
             <div className="bg-[#24432B] text-white p-5 flex items-center justify-between">
@@ -1057,7 +1063,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       )}
 
-      {/* Hộp thoại xác nhận 2 lớp: "Bạn đã chắc chắn chưa?" */}
+      {/* Hộp thoại xác nhận 2 lớp */}
       {confirmSavePayload && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-md w-full p-6 space-y-4">
@@ -1116,7 +1122,7 @@ export const FinancialVaultSection: React.FC<FinancialVaultSectionProps> = ({
         </div>
       )}
 
-      {/* Modal: Yêu cầu duyệt xóa chéo 2 chiều khi nhập lộn */}
+      {/* Modal: Yêu cầu duyệt xóa chéo */}
       {deleteTargetTx && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-md w-full p-6 space-y-4">
