@@ -1,26 +1,23 @@
 import React, { useState } from 'react';
 import { 
-  Users2, 
   Crown, 
   Search, 
-  ShieldCheck, 
-  ChevronRight,
-  Flame,
-  Star,
-  UserCheck,
-  CheckCircle2,
-  X,
-  Check,
-  Medal,
-  AlertCircle,
-  Trash2,
-  Inbox,
-  UserCog,
-  ArrowRightLeft,
-  ArrowRight,
-  Bell,
+  Flame, 
+  UserCheck, 
+  CheckCircle2, 
+  X, 
+  Check, 
+  Medal, 
+  AlertCircle, 
+  Trash2, 
+  Inbox, 
+  UserCog, 
+  ArrowRightLeft, 
+  ArrowRight, 
   Send,
-  Sparkles
+  GraduationCap,
+  ShieldAlert,
+  Clock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserProfile, DepartmentType, ClubTermRecord } from '../types';
@@ -30,9 +27,7 @@ import {
   isClubPresidentUser,
   isClubVicePresidentUser,
   canApproveDepartmentEntry,
-  canInitiateGroupTransfer,
   canApproveGroupTransfer,
-  canSelectSubDeptLeaders,
   isUserInDepartment,
   getUserRoleInDepartment,
   getUserConcurrentRoles
@@ -55,6 +50,13 @@ interface OrgChartSectionProps {
   onOpenSuccessionModal?: () => void;
   onDeleteUser?: (userId: string) => void;
 }
+
+type DeleteReasonCategory =
+  | 'Đã tốt nghiệp'
+  | 'Xin nghỉ sinh hoạt / Chuyển công tác'
+  | 'Vi phạm nội quy / Không tham gia hoạt động'
+  | 'Tài khoản ảo / Nhập trùng hồ sơ'
+  | 'Lý do khác';
 
 export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   currentUser,
@@ -89,17 +91,205 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   // Department choice map when approving a pending member
   const [approvalDeptMap, setApprovalDeptMap] = useState<Record<string, DepartmentType>>({});
 
-  const departments = DEPARTMENTS_DATA;
-  const isRoot = isMasterRootUser(currentUser);
+  // =========================================================================
+  // STATE QUẢN LÝ XÓA NHÂN SỰ (BẮT BUỘC LÝ DO & DUYỆT LÊN ACCOUNT CHÍNH)
+  // =========================================================================
+  const [deleteTargetUser, setDeleteTargetUser] = useState<UserProfile | null>(null);
+  const [deleteCategory, setDeleteCategory] = useState<DeleteReasonCategory>('Đã tốt nghiệp');
+  const [deleteCustomDetail, setDeleteCustomDetail] = useState<string>('');
+  const [pendingDeleteOverrides, setPendingDeleteOverrides] = useState<Record<string, any>>({});
+  const [locallyRemovedUserIds, setLocallyRemovedUserIds] = useState<string[]>([]);
+
+  const isRoot = isMasterRootUser(currentUser) || currentUser.id === 'bcn-root';
   const isPresident = isClubPresidentUser(currentUser);
   const isVicePresident = isClubVicePresidentUser(currentUser);
-  // Chỉ có Chủ nhiệm, Phó Chủ nhiệm và Account chính được quyền sửa đổi thông tin trong sơ đồ 4 ban
   const canModifyOrgChart = isRoot || isPresident || isVicePresident || isBcnMode;
-  const canSelectDeptLeaders = canModifyOrgChart;
   const canDeleteMembers = canModifyOrgChart;
 
-  // Dynamic BCN Leaders strictly from current userList
-  const electedBcnLeaders = userList.filter(
+  // Hợp nhất danh sách nhân sự với trạng thái chờ duyệt xóa mới nhất
+  const effectiveUserList: any[] = userList
+    .filter((u) => !locallyRemovedUserIds.includes(u.id))
+    .map((u) =>
+      pendingDeleteOverrides[u.id] !== undefined
+        ? { ...u, pendingDeletion: pendingDeleteOverrides[u.id] }
+        : u
+    );
+
+  // Danh sách thành viên đang chờ Tài khoản Chính CLB (bcn-root) duyệt xóa
+  const pendingDeletionUsers = effectiveUserList.filter(
+    (u) => u.id !== 'bcn-root' && u.pendingDeletion && u.pendingDeletion.status === 'pending_root_approval'
+  );
+
+  // Đồng bộ trạng thái chờ duyệt xóa lên server Firestore
+  const syncUsersToServer = async (updatedUsers: any[]) => {
+    try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'users', data: updatedUsers })
+      });
+    } catch (err) {
+      console.error('Lỗi đồng bộ danh sách nhân sự lên server:', err);
+    }
+  };
+
+  // Gửi thông báo lên Tài khoản Chính CLB (bcn-root)
+  const sendRootApprovalNotice = async (params: {
+    targetName: string;
+    targetStudentId: string;
+    reasonText: string;
+    isDirectGraduated: boolean;
+  }) => {
+    const title = params.isDirectGraduated
+      ? `[Nhân sự Tốt nghiệp] Đã xóa vĩnh viễn: ${params.targetName}`
+      : `[Cần Account Chính duyệt xóa] Thành viên: ${params.targetName}`;
+    const content = params.isDirectGraduated
+      ? `${currentUser.name} đã xác nhận thành viên ${params.targetName} (MSSV: ${params.targetStudentId}) đã tốt nghiệp và tiến hành xóa vĩnh viễn khỏi danh sách CLB.`
+      : `${currentUser.name} (${currentUser.position || 'BCN'}) đề nghị xóa thành viên ${params.targetName} (MSSV: ${params.targetStudentId}). Lý do: "${params.reasonText}". Kính chuyển Tài khoản Chính CLB (bcn-root) xem xét và phê duyệt.`;
+
+    try {
+      await fetch('/api/emergency-notices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          content,
+          targetRoles: ['master_root', 'bcn_admin'],
+          category: 'member_deletion_approval',
+          issuedBy: currentUser.name
+        })
+      });
+    } catch (err) {
+      console.error('Lỗi gửi thông báo duyệt xóa nhân sự:', err);
+    }
+  };
+
+  // Mở hộp thoại hỏi lý do trước khi xóa thành viên
+  const handleInitiateDeleteMember = (member: UserProfile) => {
+    setDeleteTargetUser(member);
+    setDeleteCategory('Đã tốt nghiệp');
+    setDeleteCustomDetail('');
+  };
+
+  // Xử lý xác nhận xóa theo 2 luồng
+  const handleConfirmDeleteFlow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteTargetUser) return;
+
+    const fullReason =
+      deleteCategory === 'Lý do khác'
+        ? deleteCustomDetail.trim() || 'Lý do khác'
+        : deleteCustomDetail.trim()
+        ? `${deleteCategory} — ${deleteCustomDetail.trim()}`
+        : deleteCategory;
+
+    const isGraduated = deleteCategory === 'Đã tốt nghiệp';
+
+    // LUỒNG 1: Lý do "Đã tốt nghiệp" OR chính Tài khoản Chính CLB (bcn-root) trực tiếp thao tác -> Xóa vĩnh viễn ngay
+    if (isGraduated || isRoot) {
+      const confirmMsg = isGraduated
+        ? `Xác nhận thành viên "${deleteTargetUser.name}" (${deleteTargetUser.studentId}) ĐÃ TỐT NGHIỆP và xóa vĩnh viễn khỏi hệ thống CLB?`
+        : `Tài khoản Chính CLB xác nhận xóa vĩnh viễn "${deleteTargetUser.name}" (${deleteTargetUser.studentId}) với lý do: "${fullReason}"?`;
+
+      if (!window.confirm(confirmMsg)) return;
+
+      setLocallyRemovedUserIds((prev) => [...prev, deleteTargetUser.id]);
+      if (onDeleteUser) {
+        onDeleteUser(deleteTargetUser.id);
+      }
+      await sendRootApprovalNotice({
+        targetName: deleteTargetUser.name,
+        targetStudentId: deleteTargetUser.studentId,
+        reasonText: fullReason,
+        isDirectGraduated: isGraduated
+      });
+
+      setDeptActionBanner(
+        isGraduated
+          ? `Đã xóa vĩnh viễn thành viên "${deleteTargetUser.name}" theo diện Đã tốt nghiệp!`
+          : `Tài khoản Chính CLB đã xóa vĩnh viễn thành viên "${deleteTargetUser.name}".`
+      );
+      setDeleteTargetUser(null);
+      setTimeout(() => setDeptActionBanner(null), 5000);
+      return;
+    }
+
+    // LUỒNG 2: Các lý do khác (không phải tốt nghiệp) -> Chuyển trạng thái chờ Account Chính (bcn-root) duyệt
+    const nowStr = new Date().toLocaleString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+
+    const pendingInfo = {
+      status: 'pending_root_approval',
+      reasonCategory: deleteCategory,
+      reasonDetail: fullReason,
+      requestedById: currentUser.id,
+      requestedByName: `${currentUser.name} (${currentUser.position || 'BCN'})`,
+      requestedAt: nowStr
+    };
+
+    setPendingDeleteOverrides((prev) => ({
+      ...prev,
+      [deleteTargetUser.id]: pendingInfo
+    }));
+
+    const updatedUsers = effectiveUserList.map((u) =>
+      u.id === deleteTargetUser.id ? { ...u, pendingDeletion: pendingInfo } : u
+    );
+    await syncUsersToServer(updatedUsers);
+    await sendRootApprovalNotice({
+      targetName: deleteTargetUser.name,
+      targetStudentId: deleteTargetUser.studentId,
+      reasonText: fullReason,
+      isDirectGraduated: false
+    });
+
+    setDeptActionBanner(
+      `Đã gửi đề nghị xóa "${deleteTargetUser.name}" (Lý do: ${fullReason}) lên Tài khoản Chính CLB để phê duyệt!`
+    );
+    setDeleteTargetUser(null);
+    setTimeout(() => setDeptActionBanner(null), 6000);
+  };
+
+  // Tài khoản Chính CLB (bcn-root) bấm Phê duyệt xóa vĩnh viễn
+  const handleRootApproveDeletion = async (member: any) => {
+    if (
+      !window.confirm(
+        `Tài khoản Chính CLB xác nhận phê duyệt xóa vĩnh viễn "${member.name}" (${member.studentId})?\nLý do đề nghị: ${member.pendingDeletion?.reasonDetail}`
+      )
+    ) {
+      return;
+    }
+
+    setLocallyRemovedUserIds((prev) => [...prev, member.id]);
+    if (onDeleteUser) {
+      onDeleteUser(member.id);
+    }
+    setDeptActionBanner(`Tài khoản Chính CLB đã duyệt xóa vĩnh viễn "${member.name}" khỏi hệ thống.`);
+    setTimeout(() => setDeptActionBanner(null), 5000);
+  };
+
+  // Tài khoản Chính CLB (bcn-root) bấm Từ chối xóa (Giữ lại thành viên)
+  const handleRootRejectDeletion = async (member: any) => {
+    setPendingDeleteOverrides((prev) => ({
+      ...prev,
+      [member.id]: null
+    }));
+
+    const updatedUsers = effectiveUserList.map((u) =>
+      u.id === member.id ? { ...u, pendingDeletion: null } : u
+    );
+    await syncUsersToServer(updatedUsers);
+    setDeptActionBanner(`Đã từ chối yêu cầu xóa và giữ lại thành viên "${member.name}" trong CLB.`);
+    setTimeout(() => setDeptActionBanner(null), 5000);
+  };
+
+  // Dynamic BCN Leaders
+  const electedBcnLeaders = effectiveUserList.filter(
     u =>
       u.id !== 'bcn-root' &&
       u.adminType !== 'master_root' &&
@@ -110,27 +300,10 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   );
 
   // 1. Pending department entry members
-  const pendingDeptMembers = userList.filter(u => u.departmentStatus === 'pending_approval');
+  const pendingDeptMembers = effectiveUserList.filter(u => u.departmentStatus === 'pending_approval');
 
-  // 2. Pending department transfer members (sửa duyệt lộn / chuyển nhóm)
-  const pendingTransferMembers = userList.filter(u => u.departmentStatus === 'pending_transfer');
-
-  // Open Sub-Department Leader Selection Modal
-  const handleOpenDeptLeaderModal = (e: React.MouseEvent, deptId: DepartmentType) => {
-    e.stopPropagation();
-    setDeptModalError(null);
-    setEditingDept(deptId);
-
-    const deptMembers = userList.filter(u => !isMasterRootUser(u) && isUserInDepartment(u, deptId));
-    const currentLeader = deptMembers.find(u => getUserRoleInDepartment(u, deptId) === 'leader');
-    const currentVices = deptMembers.filter(
-      u => u.id !== currentLeader?.id && getUserRoleInDepartment(u, deptId) === 'vice_leader'
-    );
-
-    setChosenLeaderId(currentLeader?.id || '');
-    setChosenVice1Id(currentVices[0]?.id || '');
-    setChosenVice2Id(currentVices[1]?.id || '');
-  };
+  // 2. Pending department transfer members
+  const pendingTransferMembers = effectiveUserList.filter(u => u.departmentStatus === 'pending_transfer');
 
   const handleSaveSubDeptLeaders = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,7 +328,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
       return;
     }
 
-    const leaderObj = userList.find(u => u.id === chosenLeaderId);
+    const leaderObj = effectiveUserList.find(u => u.id === chosenLeaderId);
     confetti({
       particleCount: 60,
       spread: 60,
@@ -168,7 +341,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     setTimeout(() => setDeptActionBanner(null), 5000);
   };
 
-  // Approve member entry into group
   const handleApproveMemberClick = (member: UserProfile) => {
     if (!onApproveDepartment) return;
     const targetDept =
@@ -194,7 +366,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     setTimeout(() => setDeptActionBanner(null), 4000);
   };
 
-  // Open group transfer / kiêm nhiệm modal for a member
   const handleOpenTransferModal = (member: UserProfile) => {
     setTransferringMember(member);
     const otherDepts: DepartmentType[] = (['Truyền thông', 'Nội dung', 'Nhân sự & Kế hoạch', 'Hậu cần'] as DepartmentType[])
@@ -205,7 +376,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     setIsConcurrentMode(true);
   };
 
-  // Submit transfer or concurrent assignment action
   const handleConfirmTransfer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!transferringMember) return;
@@ -239,8 +409,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     setTimeout(() => setDeptActionBanner(null), 5000);
   };
 
-  // Filtered official members list (supports filtering by concurrent roles in any of the 4 departments)
-  const filteredMembers = userList.filter((user) => {
+  const filteredMembers = effectiveUserList.filter((user) => {
     if (user.id === 'bcn-root') return false;
     if (user.departmentStatus === 'pending_approval' || user.departmentStatus === 'rejected') return false;
     const matchesDept = selectedDeptId === 'all' || isUserInDepartment(user, selectedDeptId);
@@ -255,8 +424,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     return matchesDept && matchesSearch;
   });
 
-  // Eligible pool for sub-department leader selection (all approved non-root members)
-  const eligibleSubDeptPool = userList.filter(
+  const eligibleSubDeptPool = effectiveUserList.filter(
     u => !isMasterRootUser(u) && u.departmentStatus === 'approved'
   );
 
@@ -272,7 +440,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
             Nhân Sự Câu Lạc Bộ
           </h2>
           <p className="text-xs sm:text-sm text-[#4A3525] leading-relaxed">
-            Cơ cấu nhân sự tinh gọn gồm <strong>Ban Lãnh Đạo (Chủ nhiệm & Phó chủ nhiệm CLB)</strong> điều hành toàn thể câu lạc bộ cùng đội ngũ thành viên nòng cốt. Khi thành viên vào lộn ban, Trưởng nhóm bấm <strong>"Chuyển nhóm"</strong>, Trưởng nhóm bên kia chấp thuận tiếp nhận và hệ thống tự động báo cáo lên Chủ nhiệm nắm bắt.
+            Cơ cấu nhân sự tinh gọn gồm <strong>Ban Lãnh Đạo (Chủ nhiệm & Phó chủ nhiệm CLB)</strong> cùng đội ngũ thành viên nòng cốt. Khi xóa nhân sự, bắt buộc ghi rõ lý do: diện <strong>Đã tốt nghiệp</strong> được xóa trực tiếp, các trường hợp khác phải trình lên <strong>Tài khoản Chính CLB</strong> phê duyệt.
           </p>
         </div>
 
@@ -307,13 +475,90 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
         </div>
       )}
 
+      {/* =========================================================================
+          KHU VỰC CHỜ TÀI KHOẢN CHÍNH CLB (bcn-root) DUYỆT XÓA NHÂN SỰ
+         ========================================================================= */}
+      {canModifyOrgChart && pendingDeletionUsers.length > 0 && (
+        <div className="rounded-3xl p-5 sm:p-6 border-3 border-rose-800 bg-rose-50/90 shadow-[6px_6px_0px_#881337] space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b-2 border-rose-800/20">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-rose-700 text-white flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5 text-amber-200" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-rose-950 font-serif-vintage">
+                  Hồ Sơ Đề Nghị Xóa Nhân Sự Chờ Tài Khoản Chính Phê Duyệt ({pendingDeletionUsers.length})
+                </h3>
+                <p className="text-xs text-rose-900">
+                  Chỉ <strong>Tài khoản Chính CLB (bcn-root)</strong> mới có quyền bấm duyệt xóa vĩnh viễn đối với các trường hợp không thuộc diện tốt nghiệp.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {pendingDeletionUsers.map((member) => (
+              <div
+                key={member.id}
+                className="p-4 rounded-2xl bg-white border-2 border-rose-800/40 flex flex-col justify-between gap-3 shadow-xs"
+              >
+                <div className="flex items-start gap-3">
+                  <img
+                    src={member.avatar}
+                    alt={member.name}
+                    className="w-11 h-11 rounded-xl object-cover border border-rose-800/30 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="font-black text-sm text-[#382215] truncate">{member.name}</div>
+                    <div className="text-xs text-[#6E472B]">
+                      MSSV: <strong>{member.studentId}</strong> · {member.position || `Ban ${member.department}`}
+                    </div>
+                    <div className="text-xs font-bold text-rose-700 pt-1">
+                      Lý do xóa: {member.pendingDeletion?.reasonDetail}
+                    </div>
+                    <div className="text-[11px] text-stone-500">
+                      Người đề nghị: {member.pendingDeletion?.requestedByName} ({member.pendingDeletion?.requestedAt})
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-rose-100 flex items-center justify-end gap-2">
+                  {isRoot ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleRootRejectDeletion(member)}
+                        className="px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-[#382215] border border-[#382215] font-bold text-xs cursor-pointer"
+                      >
+                        Từ chối / Giữ lại
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRootApproveDeletion(member)}
+                        className="px-3.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Account Chính Duyệt Xóa</span>
+                      </button>
+                    </>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-black">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>Đang chờ Tài khoản Chính CLB phê duyệt</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* =========================================================================
-          HÒM THƯ DUYỆT VÀO NHÓM & YÊU CẦU CHUYỂN NHÓM (CHỈ CHỦ NHIỆM & PHÓ CHỦ NHIỆM)
+          HÒM THƯ DUYỆT VÀO NHÓM & YÊU CẦU CHUYỂN NHÓM
          ========================================================================= */}
       {canModifyOrgChart && (
         <div className="glass-vintage p-5 sm:p-6 border-2 border-[#382215]/25 space-y-5">
-          {/* Section A: Đơn đăng ký vào nhóm mới */}
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[#382215]/15">
               <div>
@@ -321,209 +566,208 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                   <UserCheck className="w-5 h-5 text-[#C8532B]" />
                   <span>Hòm Thư Duyệt Thành Viên Vào 4 Nhóm</span>
                 </h3>
-              <p className="text-xs text-[#6E472B] mt-0.5">
-                Chủ nhiệm, Phó chủ nhiệm, Trưởng nhóm và Phó nhóm của nhóm đều có quyền duyệt thành viên vào nhóm mình. Duyệt xong biến mất ngay, giữ hòm thư sạch sẽ.
-              </p>
-            </div>
-            <span className="text-xs font-bold text-[#8C3B1E]">
-              {pendingDeptMembers.length} hồ sơ chờ duyệt
-            </span>
-          </div>
-
-          {pendingDeptMembers.length === 0 ? (
-            <div className="py-6 px-4 text-center rounded-xl bg-[#F2E5C9]/60 border border-dashed border-[#382215]/25 space-y-1">
-              <Inbox className="w-7 h-7 text-[#6E472B]/60 mx-auto" />
-              <div className="font-bold text-xs sm:text-sm text-[#382215]">
-                Hòm thư chờ duyệt vào ban hiện đang trống (0)
+                <p className="text-xs text-[#6E472B] mt-0.5">
+                  Chủ nhiệm, Phó chủ nhiệm, Trưởng nhóm và Phó nhóm của nhóm đều có quyền duyệt thành viên vào nhóm mình.
+                </p>
               </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {pendingDeptMembers.map((member) => {
-                const desiredDept =
-                  approvalDeptMap[member.id] ||
-                  member.requestedDepartment ||
-                  (member.department !== 'BQT' ? member.department : 'Nội dung');
-                const canCurrentApproveThis = canApproveDepartmentEntry(currentUser, desiredDept);
-
-                return (
-                  <div
-                    key={member.id}
-                    className="bg-[#FFFDF7] p-4 rounded-xl border-2 border-[#382215]/20 flex flex-col justify-between gap-3 shadow-xs"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <img
-                          src={member.avatar}
-                          alt={member.name}
-                          className="w-11 h-11 rounded-xl object-cover border border-[#382215]/30 shrink-0"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <h4 className="font-bold text-sm text-[#382215] truncate">{member.name}</h4>
-                          <div className="text-xs text-[#6E472B] truncate">
-                            MSSV: <span className="font-mono font-bold text-[#382215]">{member.studentId}</span> · {member.faculty}
-                          </div>
-                          <div className="text-xs font-bold text-[#C8532B] mt-1">
-                            Nguyện vọng: Ban {member.requestedDepartment || member.department}
-                          </div>
-                        </div>
-                      </div>
-
-                      {canDeleteMembers && onDeleteUser && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteUser(member.id)}
-                          className="p-1.5 rounded-lg text-[#8C3B1E] hover:bg-rose-100 transition cursor-pointer shrink-0"
-                          title="Xóa tài khoản này"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="pt-2.5 border-t border-[#382215]/10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <span className="text-[#6E472B] font-semibold">Xếp vào:</span>
-                        <select
-                          value={desiredDept}
-                          onChange={(e) =>
-                            setApprovalDeptMap(prev => ({
-                              ...prev,
-                              [member.id]: e.target.value as DepartmentType
-                            }))
-                          }
-                          className="px-2.5 py-1 rounded-lg border border-[#382215]/30 bg-[#FAF3E3] font-bold text-[#382215] text-xs"
-                        >
-                          <option value="Truyền thông">Ban Truyền thông</option>
-                          <option value="Nội dung">Ban Nội dung</option>
-                          <option value="Nhân sự & Kế hoạch">Ban Nhân sự & Kế hoạch</option>
-                          <option value="Hậu cần">Ban Hậu cần</option>
-                        </select>
-                      </div>
-
-                      {canCurrentApproveThis ? (
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleRejectMemberClick(member)}
-                            className="px-3 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-[#382215] font-bold text-xs cursor-pointer transition"
-                          >
-                            Từ chối
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleApproveMemberClick(member)}
-                            className="px-3.5 py-1.5 rounded-lg bg-[#486A39] hover:bg-[#38552B] text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition shadow-2xs"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Duyệt Vào Nhóm</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] font-semibold text-[#8C3B1E]">
-                          Chờ Trưởng/Phó Ban {desiredDept} hoặc Chủ nhiệm duyệt
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Section B: Yêu Cầu Chuyển Nhóm / Fix Lỗi Duyệt Lộn */}
-        {pendingTransferMembers.length > 0 && (
-          <div className="space-y-3 pt-4 border-t-2 border-[#382215]/15">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ArrowRightLeft className="w-5 h-5 text-[#245351]" />
-                <h4 className="font-black text-sm sm:text-base text-[#382215] font-serif-vintage">
-                  Yêu Cầu Chuyển Nhóm / Fix Lỗi Duyệt Lộn ({pendingTransferMembers.length} yêu cầu)
-                </h4>
-              </div>
-              <span className="text-[11px] text-[#245351] font-bold">
-                Trưởng/Phó nhóm mới duyệt tiếp nhận
+              <span className="text-xs font-bold text-[#8C3B1E]">
+                {pendingDeptMembers.length} hồ sơ chờ duyệt
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {pendingTransferMembers.map((member) => {
-                const targetDept = member.requestedDepartment || 'Nội dung';
-                const canApproveThisTransfer = canApproveGroupTransfer(currentUser, targetDept);
+            {pendingDeptMembers.length === 0 ? (
+              <div className="py-6 px-4 text-center rounded-xl bg-[#F2E5C9]/60 border border-dashed border-[#382215]/25 space-y-1">
+                <Inbox className="w-7 h-7 text-[#6E472B]/60 mx-auto" />
+                <div className="font-bold text-xs sm:text-sm text-[#382215]">
+                  Hòm thư chờ duyệt vào ban hiện đang trống (0)
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {pendingDeptMembers.map((member) => {
+                  const desiredDept =
+                    approvalDeptMap[member.id] ||
+                    member.requestedDepartment ||
+                    (member.department !== 'BQT' ? member.department : 'Nội dung');
+                  const canCurrentApproveThis = canApproveDepartmentEntry(currentUser, desiredDept);
 
-                return (
-                  <div
-                    key={member.id}
-                    className="p-4 rounded-xl border-2 border-[#245351]/40 bg-[#FAF3E3] space-y-3 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={member.avatar}
-                          alt={member.name}
-                          className="w-10 h-10 rounded-xl object-cover border border-[#382215]/30 shrink-0"
-                        />
-                        <div>
-                          <div className="font-bold text-sm text-[#382215]">{member.name}</div>
-                          <div className="text-xs text-[#6E472B]">MSSV: {member.studentId}</div>
+                  return (
+                    <div
+                      key={member.id}
+                      className="bg-[#FFFDF7] p-4 rounded-xl border-2 border-[#382215]/20 flex flex-col justify-between gap-3 shadow-xs"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <img
+                            src={member.avatar}
+                            alt={member.name}
+                            className="w-11 h-11 rounded-xl object-cover border border-[#382215]/30 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="font-bold text-sm text-[#382215] truncate">{member.name}</h4>
+                            <div className="text-xs text-[#6E472B] truncate">
+                              MSSV: <span className="font-mono font-bold text-[#382215]">{member.studentId}</span> · {member.faculty}
+                            </div>
+                            <div className="text-xs font-bold text-[#C8532B] mt-1">
+                              Nguyện vọng: Ban {member.requestedDepartment || member.department}
+                            </div>
+                          </div>
+                        </div>
+
+                        {canDeleteMembers && (
+                          <button
+                            type="button"
+                            onClick={() => handleInitiateDeleteMember(member)}
+                            className="p-1.5 rounded-lg text-[#8C3B1E] hover:bg-rose-100 transition cursor-pointer shrink-0"
+                            title="Xóa tài khoản này (Hỏi lý do & duyệt)"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="pt-2.5 border-t border-[#382215]/10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="text-[#6E472B] font-semibold">Xếp vào:</span>
+                          <select
+                            value={desiredDept}
+                            onChange={(e) =>
+                              setApprovalDeptMap(prev => ({
+                                ...prev,
+                                [member.id]: e.target.value as DepartmentType
+                              }))
+                            }
+                            className="px-2.5 py-1 rounded-lg border border-[#382215]/30 bg-[#FAF3E3] font-bold text-[#382215] text-xs"
+                          >
+                            <option value="Truyền thông">Ban Truyền thông</option>
+                            <option value="Nội dung">Ban Nội dung</option>
+                            <option value="Nhân sự & Kế hoạch">Ban Nhân sự & Kế hoạch</option>
+                            <option value="Hậu cần">Ban Hậu cần</option>
+                          </select>
+                        </div>
+
+                        {canCurrentApproveThis ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleRejectMemberClick(member)}
+                              className="px-3 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-[#382215] font-bold text-xs cursor-pointer transition"
+                            >
+                              Từ chối
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveMemberClick(member)}
+                              className="px-3.5 py-1.5 rounded-lg bg-[#486A39] hover:bg-[#38552B] text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition shadow-2xs"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Duyệt Vào Nhóm</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] font-semibold text-[#8C3B1E]">
+                            Chờ Trưởng/Phó Ban {desiredDept} hoặc Chủ nhiệm duyệt
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {pendingTransferMembers.length > 0 && (
+            <div className="space-y-3 pt-4 border-t-2 border-[#382215]/15">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ArrowRightLeft className="w-5 h-5 text-[#245351]" />
+                  <h4 className="font-black text-sm sm:text-base text-[#382215] font-serif-vintage">
+                    Yêu Cầu Chuyển Nhóm / Fix Lỗi Duyệt Lộn ({pendingTransferMembers.length} yêu cầu)
+                  </h4>
+                </div>
+                <span className="text-[11px] text-[#245351] font-bold">
+                  Trưởng/Phó nhóm mới duyệt tiếp nhận
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {pendingTransferMembers.map((member) => {
+                  const targetDept = member.requestedDepartment || 'Nội dung';
+                  const canApproveThisTransfer = canApproveGroupTransfer(currentUser, targetDept);
+
+                  return (
+                    <div
+                      key={member.id}
+                      className="p-4 rounded-xl border-2 border-[#245351]/40 bg-[#FAF3E3] space-y-3 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={member.avatar}
+                            alt={member.name}
+                            className="w-10 h-10 rounded-xl object-cover border border-[#382215]/30 shrink-0"
+                          />
+                          <div>
+                            <div className="font-bold text-sm text-[#382215]">{member.name}</div>
+                            <div className="text-xs text-[#6E472B]">MSSV: {member.studentId}</div>
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-md bg-[#245351] text-white font-bold text-[10px]">
+                          Chờ Duyệt Chuyển
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-white border border-[#382215]/20 text-xs space-y-1">
+                        <div className="flex items-center gap-2 font-bold text-[#382215]">
+                          <span className="text-[#8C3B1E]">Từ Ban {member.transferFromDept || member.department}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                          <span className="text-[#245351]">Sang Ban {targetDept}</span>
+                        </div>
+                        <div className="text-[11px] text-stone-600">
+                          Lý do: <em>{member.transferReason || 'Điều chỉnh nhóm phù hợp'}</em>
+                        </div>
+                        <div className="text-[10px] text-stone-500">
+                          Yêu cầu bởi: {member.transferRequestedBy || 'Trưởng nhóm'}
                         </div>
                       </div>
-                      <span className="px-2 py-0.5 rounded-md bg-[#245351] text-white font-bold text-[10px]">
-                        Chờ Duyệt Chuyển
-                      </span>
-                    </div>
 
-                    <div className="p-2.5 rounded-lg bg-white border border-[#382215]/20 text-xs space-y-1">
-                      <div className="flex items-center gap-2 font-bold text-[#382215]">
-                        <span className="text-[#8C3B1E]">Từ Ban {member.transferFromDept || member.department}</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                        <span className="text-[#245351]">Sang Ban {targetDept}</span>
-                      </div>
-                      <div className="text-[11px] text-stone-600">
-                        Lý do: <em>{member.transferReason || 'Điều chỉnh nhóm phù hợp'}</em>
-                      </div>
-                      <div className="text-[10px] text-stone-500">
-                        Yêu cầu bởi: {member.transferRequestedBy || 'Trưởng nhóm'}
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#382215]/10">
+                        {canApproveThisTransfer ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleRejectMemberClick(member)}
+                              className="px-3 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-[#382215] font-bold text-xs cursor-pointer"
+                            >
+                              Từ Chối Chuyển
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveMemberClick(member)}
+                              className="px-3.5 py-1.5 rounded-lg bg-[#245351] hover:bg-[#1A3D3B] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Chấp Nhận Vào Ban {targetDept}</span>
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-[#6E472B] font-semibold">
+                            Chờ Trưởng/Phó Ban {targetDept} hoặc Chủ nhiệm duyệt tiếp nhận
+                          </span>
+                        )}
                       </div>
                     </div>
-
-                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#382215]/10">
-                      {canApproveThisTransfer ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleRejectMemberClick(member)}
-                            className="px-3 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-[#382215] font-bold text-xs cursor-pointer"
-                          >
-                            Từ Chối Chuyển
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleApproveMemberClick(member)}
-                            className="px-3.5 py-1.5 rounded-lg bg-[#245351] hover:bg-[#1A3D3B] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Chấp Nhận Vào Ban {targetDept}</span>
-                          </button>
-                        </>
-                      ) : (
-                        <span className="text-[11px] text-[#6E472B] font-semibold">
-                          Chờ Trưởng/Phó Ban {targetDept} hoặc Chủ nhiệm duyệt tiếp nhận
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
       )}
 
       {/* =========================================================================
-          BAN CHỦ NHIỆM ĐƯƠNG NHIỆM (CHỦ NHIỆM & PHÓ CHỦ NHIỆM CLB)
+          BAN CHỦ NHIỆM ĐƯƠNG NHIỆM
          ========================================================================= */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-[#382215]/15">
@@ -595,12 +839,12 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                       </div>
                     </div>
 
-                    {canDeleteMembers && onDeleteUser && (
+                    {canDeleteMembers && (
                       <button
                         type="button"
-                        onClick={() => onDeleteUser(leader.id)}
+                        onClick={() => handleInitiateDeleteMember(leader)}
                         className="p-1.5 rounded-lg text-[#8C3B1E] hover:bg-rose-100 hover:text-rose-700 transition cursor-pointer shrink-0"
-                        title="Xóa người này khỏi CLB"
+                        title="Xóa người này khỏi CLB (Hỏi lý do & duyệt)"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -647,17 +891,17 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
             </div>
           </div>
           <span className="px-3 py-1 rounded-xl bg-[#245351] text-[#FFE29A] text-xs font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] self-start sm:self-auto">
-            {userList.filter(u => u.id !== 'bcn-root' && u.badges && u.badges.length > 0).length} Cá nhân được trao Huân chương
+            {effectiveUserList.filter(u => u.id !== 'bcn-root' && u.badges && u.badges.length > 0).length} Cá nhân được trao Huân chương
           </span>
         </div>
 
-        {userList.filter(u => u.id !== 'bcn-root' && u.badges && u.badges.length > 0).length === 0 ? (
+        {effectiveUserList.filter(u => u.id !== 'bcn-root' && u.badges && u.badges.length > 0).length === 0 ? (
           <div className="p-5 text-center rounded-2xl bg-[#FFFDF8] border-2 border-dashed border-[#382215]/30 text-xs text-[#6E472B] font-bold">
             Chưa có thành viên nào được cấp phát huân chương. Ban Chủ Nhiệm có thể trao huân chương tại mục Điều hành BCN hoặc Đánh giá năng lực.
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {userList
+            {effectiveUserList
               .filter(u => u.id !== 'bcn-root' && u.badges && u.badges.length > 0)
               .map(honoree => (
                 <div
@@ -680,7 +924,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 pt-2 border-t border-[#382215]/10">
-                    {honoree.badges.map((badge, bIdx) => (
+                    {honoree.badges.map((badge: string, bIdx: number) => (
                       <span
                         key={`${honoree.id}-medal-${bIdx}`}
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-[#E5A140]/30 text-[#382215] border border-[#382215] text-[11px] font-black shadow-[1px_1px_0px_#382215]"
@@ -697,7 +941,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
       </div>
 
       {/* =========================================================================
-          DANH BẠ THÀNH VIÊN CLB (NÚT CHUYỂN NHÓM & NÚT XÓA NGƯỜI KHÔNG THUỘC CLB)
+          DANH BẠ THÀNH VIÊN CLB
          ========================================================================= */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] space-y-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pb-3 border-b-2 border-[#382215]/15">
@@ -706,7 +950,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
               Danh Sách Nhân Sự CLB ({filteredMembers.length} thành viên)
             </h3>
             <p className="text-xs text-[#6E472B] font-medium">
-              Hiển thị thông tin nhân sự, huân chương khen thưởng, nút <strong>"Điều chuyển thành viên"</strong> và quản trị danh sách.
+              Hiển thị thông tin nhân sự, huân chương khen thưởng, nút <strong>"Điều chuyển thành viên"</strong> và quản trị danh sách có kiểm duyệt.
             </p>
           </div>
 
@@ -744,12 +988,24 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
               const isLeader = member.departmentRole === 'leader' || member.clubRole === 'president' || memberConcurrent.some(r => r.departmentRole === 'leader');
               const isVice = member.departmentRole === 'vice_leader' || member.clubRole === 'vice_president' || memberConcurrent.some(r => r.departmentRole === 'vice_leader');
               const canTransferThisMember = canModifyOrgChart;
+              const isPendingDeletion = Boolean(member.pendingDeletion);
 
               return (
                 <div
                   key={member.id}
-                  className="bg-[#FFFDF8] p-4.5 rounded-2xl border-2 border-[#382215] shadow-[3px_3px_0px_#382215] hover:shadow-[5px_5px_0px_#382215] hover:-translate-y-0.5 transition flex flex-col justify-between gap-3"
+                  className={`p-4.5 rounded-2xl border-2 flex flex-col justify-between gap-3 transition ${
+                    isPendingDeletion
+                      ? 'bg-rose-50/70 border-rose-600 shadow-[3px_3px_0px_#9F1239]'
+                      : 'bg-[#FFFDF8] border-[#382215] shadow-[3px_3px_0px_#382215] hover:shadow-[5px_5px_0px_#382215] hover:-translate-y-0.5'
+                  }`}
                 >
+                  {isPendingDeletion && (
+                    <div className="px-2.5 py-1.5 rounded-xl bg-rose-100 border border-rose-400 text-[11px] font-black text-rose-900 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                      <span>Chờ Account Chính duyệt xóa ({member.pendingDeletion?.reasonCategory})</span>
+                    </div>
+                  )}
+
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0 flex-1">
                       <img 
@@ -770,12 +1026,12 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                       </div>
                     </div>
 
-                    {canDeleteMembers && onDeleteUser && (
+                    {canDeleteMembers && !isPendingDeletion && (
                       <button
                         type="button"
-                        onClick={() => onDeleteUser(member.id)}
+                        onClick={() => handleInitiateDeleteMember(member)}
                         className="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-600 text-rose-800 hover:text-white border border-rose-300 text-xs font-black flex items-center gap-1 transition cursor-pointer shrink-0 shadow-2xs"
-                        title="Xóa người này khỏi CLB"
+                        title="Xóa người này khỏi CLB (Bắt buộc chọn lý do)"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>Xóa</span>
@@ -786,7 +1042,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                   {/* Awarded Medals / Huân Chương */}
                   {member.badges && member.badges.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-1">
-                      {member.badges.map((badge, idx) => (
+                      {member.badges.map((badge: string, idx: number) => (
                         <span
                           key={`${member.id}-badge-${idx}`}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#E5A140]/35 text-[#382215] border border-[#382215] text-[10px] font-black"
@@ -798,12 +1054,12 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                     </div>
                   )}
 
-                  {/* Actions: Điều chuyển thành viên */}
+                  {/* Actions */}
                   <div className="pt-2.5 border-t border-[#382215]/10 flex items-center justify-between text-xs">
                     <span className="text-[#6E472B] text-[11px] font-semibold truncate">
                       Nhóm: {member.department}
                     </span>
-                    {canTransferThisMember && (
+                    {canTransferThisMember && !isPendingDeletion && (
                       <button
                         type="button"
                         onClick={() => handleOpenTransferModal(member)}
@@ -823,7 +1079,119 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
       </div>
 
       {/* =========================================================================
-          MODAL: CHUYỂN NHÓM THÀNH VIÊN / FIX DUYỆT LỘN NHÓM
+          MODAL HỎI LÝ DO XÓA NHÂN SỰ (TỐT NGHIỆP XÓA NGAY / LÝ DO KHÁC CHỜ ACCOUNT CHÍNH)
+         ========================================================================= */}
+      {deleteTargetUser && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-[#FAF3E3] rounded-2xl border-3 border-[#382215] shadow-[6px_6px_0px_#382215] max-w-md w-full overflow-hidden">
+            <div className="bg-rose-800 text-white p-4 sm:p-5 flex items-center justify-between border-b-2 border-[#382215]">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 text-amber-200" />
+                <div>
+                  <h4 className="font-black text-base font-serif-vintage">
+                    Xác Nhận Lý Do Xóa Nhân Sự
+                  </h4>
+                  <p className="text-xs text-rose-100">
+                    Thành viên: <strong>{deleteTargetUser.name}</strong> ({deleteTargetUser.studentId})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteTargetUser(null)}
+                className="p-1 rounded-lg hover:bg-white/10 text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmDeleteFlow} className="p-5 space-y-4 text-xs">
+              <div>
+                <label className="block font-black text-[#382215] mb-1.5">
+                  1. Chọn lý do xóa thành viên khỏi CLB *
+                </label>
+                <select
+                  value={deleteCategory}
+                  onChange={(e) => setDeleteCategory(e.target.value as DeleteReasonCategory)}
+                  className="w-full px-3 py-2.5 rounded-xl border-2 border-[#382215] bg-white font-bold text-[#382215] text-xs"
+                >
+                  <option value="Đã tốt nghiệp">🎓 Đã tốt nghiệp (Được phép xóa vĩnh viễn ngay)</option>
+                  <option value="Xin nghỉ sinh hoạt / Chuyển công tác">📝 Xin nghỉ sinh hoạt / Chuyển công tác</option>
+                  <option value="Vi phạm nội quy / Không tham gia hoạt động">⚠️ Vi phạm nội quy / Không tham gia hoạt động</option>
+                  <option value="Tài khoản ảo / Nhập trùng hồ sơ">🔄 Tài khoản ảo / Nhập trùng hồ sơ</option>
+                  <option value="Lý do khác">✍️ Lý do khác...</option>
+                </select>
+              </div>
+
+              {/* Giải thích cơ chế tương ứng với lý do được chọn */}
+              {deleteCategory === 'Đã tốt nghiệp' ? (
+                <div className="p-3 rounded-xl bg-emerald-50 border-2 border-emerald-700/40 text-emerald-950 flex items-start gap-2">
+                  <GraduationCap className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black">Diện Cựu Thành Viên Đã Tốt Nghiệp:</p>
+                    <p className="text-[11px] mt-0.5">
+                      Hệ thống cho phép <strong>xóa vĩnh viễn ngay lập tức</strong> khỏi danh sách nhân sự đương nhiệm và lưu thông báo báo cáo lên Tài khoản Chính CLB.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-amber-100 border-2 border-amber-700/50 text-amber-950 flex items-start gap-2">
+                  <ShieldAlert className="w-5 h-5 text-amber-800 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black">
+                      {isRoot ? 'Quyền Tối Cao Tài Khoản Chính CLB:' : 'Cần Tài Khoản Chính CLB Phê Duyệt:'}
+                    </p>
+                    <p className="text-[11px] mt-0.5">
+                      {isRoot
+                        ? 'Bạn đang đăng nhập bằng Tài khoản Chính CLB nên có thể duyệt xóa trực tiếp.'
+                        : 'Với lý do này, thành viên sẽ chưa bị xóa ngay mà chuyển sang trạng thái chờ Tài khoản Chính CLB (bcn-root) xem xét và phê duyệt.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block font-bold text-[#382215] mb-1">
+                  2. Ghi chú / Chi tiết lý do {deleteCategory === 'Lý do khác' ? '*' : '(Tùy chọn)'}
+                </label>
+                <textarea
+                  rows={2}
+                  required={deleteCategory === 'Lý do khác'}
+                  value={deleteCustomDetail}
+                  onChange={(e) => setDeleteCustomDetail(e.target.value)}
+                  placeholder="Nhập chi tiết khóa tốt nghiệp, đơn xin nghỉ hoặc minh chứng liên quan..."
+                  className="w-full px-3 py-2 rounded-xl border-2 border-[#382215]/40 bg-white text-xs text-[#382215]"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5 border-t border-[#382215]/15">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTargetUser(null)}
+                  className="px-4 py-2 rounded-xl bg-white border-2 border-[#382215] text-[#382215] font-bold cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className={`px-5 py-2 rounded-xl text-white font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer ${
+                    deleteCategory === 'Đã tốt nghiệp' || isRoot
+                      ? 'bg-rose-700 hover:bg-rose-800'
+                      : 'bg-[#245351] hover:bg-[#193B39]'
+                  }`}
+                >
+                  {deleteCategory === 'Đã tốt nghiệp' || isRoot
+                    ? 'Xóa Vĩnh Viễn Ngay'
+                    : 'Trình Account Chính Duyệt Xóa'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CHUYỂN NHÓM THÀNH VIÊN
          ========================================================================= */}
       {transferringMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200">
@@ -899,7 +1267,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                 />
               </div>
 
-              {/* Chế độ Kiêm nhiệm hoặc Chuyển hẳn */}
               <div className="p-3.5 rounded-xl bg-[#F2E5C9] border-2 border-[#382215] space-y-2">
                 <div className="font-black text-[#382215] text-xs">
                   Chế độ phân công (Hỗ trợ 1 người kiêm nhiệm nhiều ban):
@@ -915,9 +1282,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                   <div>
                     <div className="font-bold text-[#382215]">
                       Kiêm nhiệm thêm Ban {targetTransferDept} (Giữ nguyên các chức vụ & ban hiện tại)
-                    </div>
-                    <div className="text-[10px] text-[#6E472B]">
-                      Phù hợp khi CLB thiếu nhân sự: 1 thành viên có thể tham gia và giữ chức vụ ở nhiều ban cùng lúc.
                     </div>
                   </div>
                 </label>
@@ -959,7 +1323,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
       )}
 
       {/* =========================================================================
-          MODAL: CHỌN TRƯỞNG NHÓM VÀ PHÓ NHÓM CHO CÁC BAN BỆ NHỎ
+          MODAL: CHỌN TRƯỞNG NHÓM VÀ PHÓ NHÓM
          ========================================================================= */}
       {editingDept && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200">
@@ -995,11 +1359,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                 </div>
               )}
 
-              <div className="p-3 rounded-xl bg-[#F2E5C9] border border-[#382215]/30 text-[#382215] text-[11px] font-medium">
-                <strong>💡 Chế độ Kiêm Nhiệm:</strong> Một thành viên có thể đồng thời giữ chức Trưởng nhóm / Phó nhóm ở nhiều Ban khác nhau (hoặc vừa là Chủ nhiệm/Phó chủ nhiệm vừa kiêm Trưởng/Phó ban) mà <strong>không bị mất chức vụ ở ban cũ</strong>.
-              </div>
-
-              {/* Select Trưởng Nhóm */}
               <div className="bg-[#FFFDF7] p-4 rounded-xl border-2 border-[#C8532B] space-y-2">
                 <label className="block font-bold text-[#382215] text-xs sm:text-sm">
                   1. Chọn Trưởng Nhóm / Trưởng Ban {editingDept}
@@ -1018,7 +1377,6 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                 </select>
               </div>
 
-              {/* Select Phó Nhóm 1 & Phó Nhóm 2 */}
               <div className="bg-[#FFFDF7] p-4 rounded-xl border-2 border-[#382215]/20 space-y-3">
                 <label className="block font-bold text-[#382215] text-xs sm:text-sm">
                   2. Chọn Phó Nhóm / Phó Ban {editingDept} (Tối đa 2 Phó nhóm)
