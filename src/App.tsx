@@ -35,7 +35,6 @@ import {
   INITIAL_TASKS,
   INITIAL_DECREES,
   MASTER_PASSCODE,
-  SPECIAL_BCN_ACCOUNTS,
   INITIAL_RECRUITMENT_QUESTIONS,
   INITIAL_APPLICATIONS,
   HALL_OF_FAME_DATA,
@@ -44,8 +43,7 @@ import {
 import { 
   fetchCloudState, 
   pushCloudSync, 
-  registerUserToCloud, 
-  ensureLocalUsersOnCloud,
+  registerUserToCloud,
   sendReportToCloud,
   sendReportResponseToCloud,
   sendPostToCloud,
@@ -83,7 +81,6 @@ import {
 import { Download } from 'lucide-react';
 import { safeLocalStorageSet } from './utils/fileUpload';
 import { EmergencyNoticeBanner } from './components/EmergencyNoticeBanner';
-import { DynamicIsland } from './components/DynamicIsland';
 import { Navbar, ActiveTab } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
 import { InitialAuthGate } from './components/InitialAuthGate';
@@ -99,24 +96,21 @@ import { HallOfFameSection } from './components/HallOfFameSection';
 import { BcnToastManager } from './components/BcnToastManager';
 import { WelcomeGuideModal } from './components/WelcomeGuideModal';
 import { BookSearchGroundingWidget } from './components/BookSearchGroundingWidget';
+import { SurveyMinutesSection } from './components/SurveyMinutesSection';
 import { syncCurrentUserToFirestore, signOutFirebase } from './firebase';
 import { 
   MapPin, 
-  Crown, 
   LogOut, 
-  UserPlus, 
-  History, 
   ShieldCheck, 
-  Cloud, 
-  RefreshCw, 
-  Smartphone, 
-  Laptop,
-  UserCheck,
-  Users2
+  KeyRound,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  AlertTriangle,
+  X
 } from 'lucide-react';
 
 export default function App() {
-  // Parse URL query parameters for quick navigation / verification (?autostart=1&role=root|president&tab=org or ?apply=1 / /tuyen-thanh-vien-k26)
   const searchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
   const autoStartParam = searchParams.get('autostart') === '1';
@@ -128,7 +122,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>(
     isDirectApplyLink
       ? 'recruitment'
-      : initialTabParam && ['feed', 'command', 's5t', 'reports', 'vault', 'org', 'recruitment', 'fame'].includes(initialTabParam)
+      : initialTabParam && ['feed', 'command', 'surveys', 's5t', 'reports', 'vault', 'org', 'recruitment', 'fame'].includes(initialTabParam)
         ? initialTabParam
         : 'feed'
   );
@@ -143,14 +137,9 @@ export default function App() {
     }
   });
 
-  // Multi-Device Cloud Sync State
   const [syncStatus, setSyncStatus] = useState<'connected' | 'syncing' | 'offline'>('syncing');
-  const [lastServerUpdate, setLastServerUpdate] = useState<number>(0);
   const lastServerUpdateRef = useRef<number>(0);
-  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
-  const isInitialLoadDone = useRef(false);
 
-  // Upfront Registration & Login Gate state: Must require explicit authenticated user session
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     if (autoStartParam) return true;
     const authFlag = localStorage.getItem('agu_authenticated') === 'true';
@@ -158,27 +147,10 @@ export default function App() {
     return authFlag && Boolean(savedUser);
   });
 
-  // Users list state (includes permanent master root + elected student leaders + registered members, filtering out locally deleted IDs)
   const [userList, setUserList] = useState<UserProfile[]>(() => {
     try {
       if (localStorage.getItem('agu_clean_official_launch_v4') !== 'true') {
         localStorage.removeItem('agu_user_list');
-        localStorage.removeItem('agu_my_accounts');
-        localStorage.removeItem('agu_personal_user');
-        localStorage.removeItem('agu_user');
-        localStorage.removeItem('agu_posts');
-        localStorage.removeItem('agu_lockets');
-        localStorage.removeItem('agu_criteria');
-        localStorage.removeItem('agu_proofs');
-        localStorage.removeItem('agu_reports');
-        localStorage.removeItem('agu_transactions');
-        localStorage.removeItem('agu_plans');
-        localStorage.removeItem('agu_tasks');
-        localStorage.removeItem('agu_decrees');
-        localStorage.removeItem('agu_applications');
-        localStorage.removeItem('agu_hall_of_fame');
-        localStorage.removeItem('agu_term_history');
-        localStorage.removeItem('agu_emergency_notices');
         localStorage.setItem('agu_clean_official_launch_v4', 'true');
       }
     } catch {
@@ -212,7 +184,6 @@ export default function App() {
     return SAMPLE_USERS.filter(u => !deletedSet.has(u.id));
   });
 
-  // Current logged in user
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     const saved = localStorage.getItem('agu_user');
     if (saved) {
@@ -226,20 +197,9 @@ export default function App() {
     return SAMPLE_USERS[0];
   });
 
-  // Do not store or expose passwordless saved accounts on shared devices
-  const [mySavedAccounts, setMySavedAccounts] = useState<UserProfile[]>(() => {
-    try {
-      localStorage.removeItem('agu_my_accounts');
-      localStorage.removeItem('agu_personal_user');
-    } catch {
-      // ignore
-    }
-    return [];
-  });
+  const [mySavedAccounts, setMySavedAccounts] = useState<UserProfile[]>([]);
 
-  const rememberPersonalAccount = (_user: UserProfile) => {
-    // Disabled passwordless device account caching for strict security
-  };
+  const rememberPersonalAccount = (_user: UserProfile) => {};
 
   const [isBcnMode, setIsBcnMode] = useState<boolean>(() => {
     if (autoStartParam) {
@@ -249,14 +209,12 @@ export default function App() {
     return localStorage.getItem('agu_is_bcn') === 'true';
   });
 
-  // Master Root Account & Club Leadership determinations
   const isMasterRoot = isMasterRootUser(currentUser) || (isBcnMode && currentUser.id === 'bcn-root');
   const isClubPresident = isClubPresidentUser(currentUser);
   const isClubVicePresident = isClubVicePresidentUser(currentUser);
   const isBcnLeader = isClubPresident || isClubVicePresident || isMasterRoot || isBcnMode || currentUser.role === 'bcn_admin';
   const isSubDeptLeader = !isBcnLeader && (currentUser.departmentRole === 'leader' || currentUser.departmentRole === 'vice_leader' || currentUser.role === 'lead');
 
-  // Ensure isBcnMode cannot be true for a member who is not in BCN
   useEffect(() => {
     const isLeadershipUser = currentUser.role === 'bcn_admin' || currentUser.adminType === 'master_root' || currentUser.adminType === 'bcn_elected' || isMasterRootUser(currentUser) || isClubPresidentUser(currentUser) || isClubVicePresidentUser(currentUser);
     if (!isLeadershipUser && isBcnMode) {
@@ -264,14 +222,12 @@ export default function App() {
     }
   }, [currentUser, isBcnMode]);
 
-  // Safety: If regular member navigates to recruitment tab (unless via direct recruitment link), redirect to feed
   useEffect(() => {
     if (!isBcnLeader && !isSubDeptLeader && activeTab === 'recruitment' && !isDirectApplyLink && !isPublicApplyMode) {
       setActiveTab('feed');
     }
   }, [currentUser, isBcnLeader, isSubDeptLeader, activeTab, isDirectApplyLink, isPublicApplyMode]);
 
-  // Main Data States with localStorage persistence + Centralized Server Storage
   const [posts, setPosts] = useState<Post[]>(() => {
     const saved = localStorage.getItem('agu_posts');
     return saved ? JSON.parse(saved) : INITIAL_POSTS;
@@ -315,7 +271,6 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
   });
 
-  // Co-Planning, Tasks, Decrees
   const [plans, setPlans] = useState<ClubPlan[]>(() => {
     const saved = localStorage.getItem('agu_plans');
     return saved ? JSON.parse(saved) : INITIAL_PLANS;
@@ -331,7 +286,6 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_DECREES;
   });
 
-  // Recruitment & Succession & Hall of Fame & Term History States
   const [questions, setQuestions] = useState<RecruitmentQuestion[]>(() => {
     const saved = localStorage.getItem('agu_recruitment_questions');
     if (saved) {
@@ -380,7 +334,6 @@ export default function App() {
     return [];
   });
 
-  // Emergency Notices State (Empty by default unless issued by President / Vice President)
   const [emergencyNotices, setEmergencyNotices] = useState<EmergencyNotice[]>(() => {
     const saved = localStorage.getItem('agu_emergency_notices');
     if (saved) {
@@ -394,7 +347,6 @@ export default function App() {
     return [];
   });
 
-  // Official Annual Theme State (Chủ đề năm do Chủ nhiệm & Phó Chủ nhiệm đặt)
   const [annualTheme, setAnnualTheme] = useState<AnnualTheme>(() => {
     const saved = localStorage.getItem('agu_annual_theme');
     if (saved) {
@@ -412,9 +364,6 @@ export default function App() {
     };
   });
 
-  // =========================================================================
-  // MULTI-DEVICE CLOUD SYNCHRONIZATION LOGIC (WITH SELF-HEALING ACCOUNT MERGE)
-  // =========================================================================
   const applyRemoteState = (cloudData: GlobalSyncState) => {
     if (cloudData.userList && Array.isArray(cloudData.userList)) {
       let localDeletedIds: string[] = [];
@@ -432,7 +381,6 @@ export default function App() {
       setUserList(cloudUsers);
       localStorage.setItem('agu_user_list', JSON.stringify(cloudUsers));
 
-      // Update currentUser if server has fresher fields; if currentUser was deleted/removed, fall back to bcn-root
       const todayStr = new Date().toLocaleDateString('vi-VN');
       setCurrentUser(prev => {
         const updatedSelf = cloudUsers.find(
@@ -513,13 +461,11 @@ export default function App() {
     if (cloudData.annualTheme) setAnnualTheme(cloudData.annualTheme);
     
     if (cloudData.lastUpdated) {
-      setLastServerUpdate(cloudData.lastUpdated);
       lastServerUpdateRef.current = cloudData.lastUpdated;
     }
     setSyncStatus('connected');
   };
 
-  // Initial load from cloud + continuous polling every 20s for changes made on other devices
   useEffect(() => {
     let isMounted = true;
 
@@ -528,10 +474,8 @@ export default function App() {
       const cloudData = await fetchCloudState();
       if (cloudData && isMounted) {
         applyRemoteState(cloudData);
-        isInitialLoadDone.current = true;
       } else if (isMounted) {
         setSyncStatus('connected');
-        isInitialLoadDone.current = true;
       }
     }
     initialSync();
@@ -552,26 +496,6 @@ export default function App() {
     };
   }, []);
 
-  // Manual Trigger to force instant cloud refresh
-  const handleManualSyncNow = async () => {
-    setIsManualSyncing(true);
-    setSyncStatus('syncing');
-    const cloudData = await fetchCloudState();
-    if (cloudData) {
-      applyRemoteState(cloudData);
-      confetti({
-        particleCount: 40,
-        spread: 50,
-        origin: { y: 0.1 }
-      });
-    }
-    setTimeout(() => {
-      setIsManualSyncing(false);
-      setSyncStatus('connected');
-    }, 600);
-  };
-
-  // Local storage caching
   useEffect(() => {
     localStorage.setItem('agu_authenticated', String(isAuthenticated));
   }, [isAuthenticated]);
@@ -652,7 +576,6 @@ export default function App() {
     localStorage.setItem('agu_annual_theme', JSON.stringify(annualTheme));
   }, [annualTheme]);
 
-  // Auth gate handlers
   const handleSelectUser = (user: UserProfile) => {
     setCurrentUser(user);
     if (user.role === 'bcn_admin' || user.adminType === 'master_root' || user.adminType === 'bcn_elected') {
@@ -664,9 +587,6 @@ export default function App() {
       const exists = prev.some(u => u.id === user.id);
       return exists ? prev.map(u => (u.id === user.id ? user : u)) : [user, ...prev];
     });
-    if (user.id !== 'bcn-root' && user.adminType !== 'master_root') {
-      rememberPersonalAccount(user);
-    }
   };
 
   const handleGateLogin = (user: UserProfile, isBcn: boolean) => {
@@ -685,7 +605,6 @@ export default function App() {
   const handleGateRegister = async (newUser: UserProfile) => {
     setUserList(prev => [newUser, ...prev.filter(u => u.id !== newUser.id)]);
     setCurrentUser(newUser);
-    rememberPersonalAccount(newUser);
     setIsBcnMode(false);
     setIsAuthenticated(true);
     setIsWelcomeGuideOpen(true);
@@ -703,7 +622,6 @@ export default function App() {
     setActiveTab('feed');
   };
 
-  // Actions
   const handleCheckIn = async () => {
     const todayStr = new Date().toLocaleDateString('vi-VN');
     if (currentUser.lastCheckInDate === todayStr) return;
@@ -725,7 +643,6 @@ export default function App() {
     };
 
     setCurrentUser(updatedUser);
-    rememberPersonalAccount(updatedUser);
     setUserList(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
 
     syncCurrentUserToFirestore(updatedUser).catch(() => {});
@@ -742,7 +659,6 @@ export default function App() {
 
   const handleRegisterUser = async (newUser: UserProfile) => {
     setUserList(prev => [newUser, ...prev.filter(u => u.id !== newUser.id)]);
-    rememberPersonalAccount(newUser);
     const updatedState = await registerUserToCloud(newUser);
     if (updatedState) applyRemoteState(updatedState);
   };
@@ -940,7 +856,6 @@ export default function App() {
         password: payload.newPassword || currentUser.password
       };
       setCurrentUser(updatedCurrent);
-      rememberPersonalAccount(updatedCurrent);
     }
     setUserList(prev => prev.map(u => {
       if (u.id === payload.userId) {
@@ -959,11 +874,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // =========================================================================
-  // 3 CORE GOVERNANCE HANDLERS
-  // =========================================================================
-
-  // 1. Duyệt thành viên vào các ban bệ
   const handleApproveDepartment = async (targetUserId: string, department: DepartmentType, note?: string) => {
     const updatedUsers = approveUserIntoDepartment(userList, targetUserId, department, note);
     setUserList(updatedUsers);
@@ -989,7 +899,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // 2. Chọn Trưởng ban & Phó ban cho ban bệ nhỏ
   const handleAppointSubDeptLeaders = async (payload: {
     department: DepartmentType;
     leaderId: string;
@@ -1014,7 +923,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Single member sub-department role assignment (from BcnCommandCenter)
   const handleAssignRole = async (payload: {
     targetUserId: string;
     department: string;
@@ -1034,7 +942,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // 3. Phân quyền Trưởng CLB & Phó CLB tại mỗi nhiệm kỳ là người khác nhau
   const handleAppointFullTerm = async (payload: FullTermAppointmentPayload) => {
     const result = appointClubTermLeaders(userList, hallOfFame, termHistory, payload);
     if (result.error) {
@@ -1048,7 +955,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // 4. Trưởng nhóm / Phó nhóm yêu cầu chuyển nhóm (sửa lỗi duyệt lộn) -> báo cáo lên Chủ nhiệm & Phó Chủ nhiệm
   const handleRequestGroupTransfer = async (targetUserId: string, newDept: DepartmentType, reason: string) => {
     const { updatedUsers, reportItem } = requestMemberGroupTransfer(
       userList,
@@ -1067,7 +973,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // 5. Chủ nhiệm CLB chuyển thẳng lập tức thành viên giữa các nhóm ("thẳng thắn không cần nói gì hết")
   const handleDirectGroupTransfer = async (targetUserId: string, newDept: DepartmentType, reason?: string) => {
     const updatedUsers = directTransferMemberGroup(
       userList,
@@ -1081,7 +986,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // 6. Phát và quản lý thông báo khẩn cấp (Emergency Notice)
   const handleAddEmergencyNotice = async (noticeData: Omit<EmergencyNotice, 'id' | 'issuedAt'>) => {
     const newNotice: EmergencyNotice = {
       ...noticeData,
@@ -1126,7 +1030,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Cập nhật Chủ đề năm (Annual Theme)
   const handleUpdateAnnualTheme = async (newTheme: AnnualTheme) => {
     setAnnualTheme(newTheme);
     localStorage.setItem('agu_annual_theme', JSON.stringify(newTheme));
@@ -1134,7 +1037,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Tăng Chuỗi Đọc Sách khi thành viên gửi bài Cảm Nhận Sách
   const handleIncreaseReadingStreak = async () => {
     const nextStreak = (currentUser.readingStreak || 0) + 1;
     const updatedUser: UserProfile = {
@@ -1143,7 +1045,6 @@ export default function App() {
       meritPoints: (currentUser.meritPoints || 50) + 25
     };
     setCurrentUser(updatedUser);
-    rememberPersonalAccount(updatedUser);
     setUserList(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
     await updateProfileOnCloud({
       userId: updatedUser.id,
@@ -1163,7 +1064,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Co-Planning and Tasks Handlers
   const handleAddPlan = async (newPlan: Omit<ClubPlan, 'id' | 'votesAgree' | 'votesDisagree'>) => {
     const planItem: ClubPlan = {
       ...newPlan,
@@ -1357,7 +1257,6 @@ export default function App() {
     setIsBcnMode(false);
   };
 
-  // Recruitment Question & Application Handlers
   const handleAddQuestion = async (q: Omit<RecruitmentQuestion, 'id'>) => {
     const newQ: RecruitmentQuestion = {
       ...q,
@@ -1408,7 +1307,6 @@ export default function App() {
     });
     setApplications(nextApps);
 
-    // When Account Chính approves a recruitment application, also admit or create the member in the requested department!
     if (status === 'approved' && reviewedApp) {
       const existingMember = userList.find(
         u =>
@@ -1455,7 +1353,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Succession Transfer Handler: Single-position Named Transfer (Bàn giao đích danh) + Preserve Outgoing Leader
   const handleTransferSuccession = async (payload: SuccessionTransferPayload) => {
     const {
       targetPositionKey,
@@ -1562,11 +1459,9 @@ export default function App() {
     }
   };
 
-  // Admin Account Deletion Handler (1-click permanent removal across local & cloud)
   const handleDeleteUser = async (userId: string) => {
     if (!userId || userId === 'bcn-root') return;
 
-    // Persist deleted ID locally so it never resurrects from localStorage or SAMPLE_USERS
     try {
       const rawDel = localStorage.getItem('agu_deleted_user_ids');
       const existingDel: string[] = rawDel ? JSON.parse(rawDel) : [];
@@ -1582,23 +1477,11 @@ export default function App() {
     setUserList(updatedList);
     localStorage.setItem('agu_user_list', JSON.stringify(updatedList));
 
-    // Also remove from saved device accounts if present
     setMySavedAccounts(prev => {
       const next = prev.filter(u => u.id !== userId);
       localStorage.setItem('agu_my_accounts', JSON.stringify(next));
       return next;
     });
-    try {
-      const rawPersonal = localStorage.getItem('agu_personal_user');
-      if (rawPersonal) {
-        const parsedPersonal = JSON.parse(rawPersonal);
-        if (parsedPersonal && parsedPersonal.id === userId) {
-          localStorage.removeItem('agu_personal_user');
-        }
-      }
-    } catch {
-      // ignore
-    }
 
     const updatedState = await deleteUserFromCloud(userId);
     if (updatedState) applyRemoteState(updatedState);
@@ -1611,7 +1494,6 @@ export default function App() {
     }
   };
 
-  // Hall of Fame manual add, update, and delete
   const handleAddToHallOfFame = async (newItem: Omit<HallOfFameItem, 'id'>) => {
     const record: HallOfFameItem = {
       ...newItem,
@@ -1649,7 +1531,6 @@ export default function App() {
     if (updatedState) applyRemoteState(updatedState);
   };
 
-  // Member Competency Evaluation Handlers (Đánh giá năng lực thành viên định kỳ)
   const handleAddEvaluation = async (newEval: Omit<MemberEvaluation, 'id' | 'createdAt'>) => {
     const item: MemberEvaluation = {
       ...newEval,
@@ -1701,8 +1582,7 @@ export default function App() {
     emergencyNotices.filter(n => !readNoticeIds.includes(n.id)).length +
     decrees.filter(d => !readNoticeIds.includes(d.id)).length;
 
-  // 24-Hour JSON Backup Reminder System for Account Chính (Master Root)
-  const [lastBackupTime, setLastBackupTime] = useState<number>(() => {
+  const [lastBackupTime] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('agu_last_backup_time');
       return saved ? Number(saved) : Date.now();
@@ -1712,7 +1592,6 @@ export default function App() {
   });
 
   const [is24hBackupReminderOpen, setIs24hBackupReminderOpen] = useState<boolean>(false);
-
   const hoursSinceLastBackup = Math.floor((Date.now() - lastBackupTime) / 3600000);
   const isBackupDue = (Date.now() - lastBackupTime) >= 86400000;
 
@@ -1724,9 +1603,6 @@ export default function App() {
 
   const handleDownloadBackupAndReset24h = () => {
     window.open('/api/backup/download', '_blank');
-    const now = Date.now();
-    setLastBackupTime(now);
-    safeLocalStorageSet('agu_last_backup_time', String(now));
     setIs24hBackupReminderOpen(false);
   };
 
@@ -1778,7 +1654,6 @@ export default function App() {
     }
   };
 
-  // If user opened the direct recruitment link (?apply=1 or /tuyen-thanh-vien-k26) while not logged in
   if (!isAuthenticated && isPublicApplyMode) {
     return (
       <div className="min-h-screen bg-[#F8F5EE] flex flex-col justify-between p-3 sm:p-6">
@@ -1787,7 +1662,7 @@ export default function App() {
             <div className="flex items-center gap-3.5">
               <img
                 src="/assets/aistudio/TUYE__N_THA_NH_VIE_N_778c37b9.png"
-                alt="Logo CLB Đọc và Giới thiệu sách"
+                alt="Logo CLB"
                 className="h-12 sm:h-14 w-auto object-contain rounded-full shrink-0"
               />
               <div>
@@ -1802,9 +1677,9 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsPublicApplyMode(false)}
-              className="px-4 py-2 rounded-xl bg-[#382215] hover:bg-[#523321] text-[#FAF3E3] font-black text-xs cursor-pointer transition shrink-0"
+              className="px-4 py-2 rounded-xl bg-[#382215] text-[#FAF3E3] font-black text-xs cursor-pointer transition shrink-0"
             >
-              Về Cổng Đăng Nhập / Đăng Ký Tài Khoản →
+              Về Cổng Đăng Nhập / Đăng Ký →
             </button>
           </div>
 
@@ -1830,26 +1705,21 @@ export default function App() {
             onApproveDepartment={handleApproveDepartment}
           />
         </div>
-
-        <div className="text-center py-3 text-[#382215] font-semibold text-[11px]">
-          CLB Đọc và Giới thiệu sách • Trường Đại học An Giang (AGU)
-        </div>
       </div>
     );
   }
 
-  // If user is not authenticated yet, show Upfront Registration & Login Gate
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen flex flex-col justify-between">
         <div className="bg-[#FAF3E3] border-b-2 border-[#382215]/20 py-2 px-4 flex items-center justify-center gap-3 text-xs">
-          <span className="font-bold text-[#382215]">Bạn có link tuyển thành viên hoặc muốn nộp đơn ứng tuyển trực tuyến?</span>
+          <span className="font-bold text-[#382215]">Bạn có link tuyển thành viên hoặc muốn nộp đơn ứng tuyển?</span>
           <button
             type="button"
             onClick={() => setIsPublicApplyMode(true)}
-            className="px-3 py-1 rounded-lg bg-[#C8532B] hover:bg-[#A63E1B] text-white font-black text-xs cursor-pointer transition"
+            className="px-3 py-1 rounded-lg bg-[#C8532B] text-white font-black text-xs cursor-pointer transition"
           >
-            Mở Form Ứng Tuyển Thành Viên →
+            Mở Form Tuyển Thành Viên →
           </button>
         </div>
 
@@ -1869,7 +1739,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col selection:bg-[#C8532B] selection:text-white pb-10">
-      {/* Main Navbar (Clean single header — shows whichever account registered or logged in) */}
       <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -1884,208 +1753,49 @@ export default function App() {
         onOpenEmergencyModal={() => setIsDecreeNoticeModalOpen(true)}
       />
 
-      {/* BẢNG THÔNG BÁO SẮC LỆNH THÔNG TRI & KHẨN CẤP (MỞ KHI BẤM CHUÔNG / HOT TRÊN GÓC BỘ BA LOGO) */}
+      {/* SẮC LỆNH & THÔNG BÁO MODAL */}
       {isDecreeNoticeModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
           <div className="bg-[#FAF3E3] rounded-3xl border-3 border-[#382215] shadow-[8px_8px_0px_#382215] w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="bg-[#C8532B] text-white p-4.5 flex items-center justify-between border-b-3 border-[#382215]">
               <div className="flex items-center gap-2.5">
                 <span className="px-2 py-0.5 rounded-full bg-[#FFE29A] text-[#382215] text-[10px] font-black uppercase">
                   {unreadAlertsCount > 0 ? `${unreadAlertsCount} HOT` : 'THÔNG BÁO'}
                 </span>
-                <div>
-                  <h4 className="font-black text-base font-serif-vintage">
-                    Bảng Sắc Lệnh Thông Tri & Thông Báo CLB
-                  </h4>
-                  <p className="text-[11px] text-[#FFE29A] font-semibold">
-                    Ban hành từ Mục Kế Hoạch & Ban Chủ Nhiệm Câu Lạc Bộ
-                  </p>
-                </div>
+                <h4 className="font-black text-base font-serif-vintage">Bảng Sắc Lệnh Thông Tri & Thông Báo CLB</h4>
               </div>
               <button
                 type="button"
                 onClick={() => setIsDecreeNoticeModalOpen(false)}
-                className="p-1.5 rounded-xl bg-black/20 hover:bg-black/30 text-white cursor-pointer font-black"
+                className="p-1.5 rounded-xl bg-black/20 text-white cursor-pointer font-black"
               >
                 ✕
               </button>
             </div>
 
-            {/* Filter Pills Bar */}
-            <div className="bg-[#F2E5C9] p-3 border-b-2 border-[#382215]/20 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-              {[
-                { id: 'all', label: 'Tất cả thông báo' },
-                { id: 'urgent', label: '⚡ Khẩn cấp' },
-                { id: 'award', label: '🏆 Khen thưởng' },
-                { id: 'announcement', label: '📢 Thông tri chung' }
-              ].map(f => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setDecreeModalFilter(f.id as any)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-black border transition cursor-pointer whitespace-nowrap ${
-                    decreeModalFilter === f.id
-                      ? 'bg-[#C8532B] text-white border-[#382215] shadow-[2px_2px_0px_#382215]'
-                      : 'bg-[#FFFDF8] text-[#382215] border-[#382215]/30 hover:bg-[#EAD8B3]'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Mark All as Read Action Bar */}
-            <div className="px-4 py-2 bg-[#FAF3E3] border-b border-[#382215]/15 flex items-center justify-between text-[11px] font-bold">
-              <span className="text-[#6E472B]">
-                Chưa đọc: <strong className="text-[#C8532B] font-mono font-black">{unreadAlertsCount}</strong> thông báo
-              </span>
-              <button
-                type="button"
-                onClick={handleMarkAllNoticesAsRead}
-                className="text-[#245351] hover:underline font-black cursor-pointer flex items-center gap-1"
-              >
-                <span>✓ Đánh dấu tất cả là đã đọc</span>
-              </button>
-            </div>
-
             <div className="p-5 overflow-y-auto space-y-4 text-xs text-[#382215]">
-              {(decreeModalFilter === 'all' || decreeModalFilter === 'urgent') && emergencyNotices.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="text-[11px] font-black uppercase tracking-wider text-[#C8532B] flex items-center justify-between">
-                    <span>🚨 Thông Báo Khẩn Cấp ({emergencyNotices.length})</span>
-                    <span className="text-[10px] bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-black">Lệnh Khẩn</span>
-                  </div>
-                  {emergencyNotices.map(notice => {
-                    const isRead = readNoticeIds.includes(notice.id);
-                    return (
-                      <div
-                        key={notice.id}
-                        onClick={() => handleMarkNoticeAsRead(notice.id)}
-                        className={`p-4 rounded-2xl border-2 transition cursor-pointer space-y-1.5 ${
-                          isRead
-                            ? 'bg-[#FAF3E3]/60 border-[#382215]/30 opacity-60 shadow-2xs'
-                            : 'bg-[#FFFDF8] border-[#C8532B] shadow-[3px_3px_0px_#382215]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            {!isRead && (
-                              <span className="px-1.5 py-0.2 rounded bg-rose-600 text-white text-[9px] font-black animate-pulse">
-                                MỚI
-                              </span>
-                            )}
-                            <span className={`font-black text-sm ${isRead ? 'text-[#382215]/70 line-through' : 'text-[#C8532B]'}`}>
-                              {notice.title}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {isRead && (
-                              <span className="text-[10px] font-bold text-[#486A39]">
-                                ✓ Đã đọc
-                              </span>
-                            )}
-                            <span className="text-[10px] font-bold text-[#6E472B]">{notice.issuedAt}</span>
-                          </div>
-                        </div>
-                        <p className="text-xs text-[#382215] leading-relaxed">{notice.content}</p>
-                        <div className="text-[10px] font-bold text-[#245351]">
-                          Người ban hành: {notice.issuedBy} ({notice.issuedByRole})
-                        </div>
-                      </div>
-                    );
-                  })}
+              {emergencyNotices.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-black uppercase text-[#C8532B]">🚨 Thông Báo Khẩn Cấp</div>
+                  {emergencyNotices.map(notice => (
+                    <div key={notice.id} className="p-3.5 rounded-2xl bg-[#FFFDF8] border-2 border-[#C8532B] space-y-1">
+                      <div className="font-black text-sm text-[#C8532B]">{notice.title}</div>
+                      <p className="text-xs">{notice.content}</p>
+                    </div>
+                  ))}
                 </div>
               )}
-
-              <div className="space-y-2.5">
-                <div className="text-[11px] font-black uppercase tracking-wider text-[#245351]">
-                  📜 Sắc Lệnh Thông Tri Lọc Theo Loại (
-                  {decrees.filter(d => decreeModalFilter === 'all' || d.type === decreeModalFilter).length})
+              {decrees.map(decree => (
+                <div key={decree.id} className="p-3.5 rounded-2xl bg-[#FFFDF8] border-2 border-[#382215] space-y-1">
+                  <div className="font-black text-sm text-[#382215]">{decree.title}</div>
+                  <p className="text-xs">{decree.content}</p>
                 </div>
-                {decrees.filter(d => decreeModalFilter === 'all' || d.type === decreeModalFilter).length === 0 ? (
-                  <div className="p-5 rounded-2xl bg-[#FFFDF8] border-2 border-dashed border-[#382215]/30 text-center text-[#6E472B] font-bold">
-                    Không có sắc lệnh thông tri nào trong danh mục này.
-                  </div>
-                ) : (
-                  decrees
-                    .filter(d => decreeModalFilter === 'all' || d.type === decreeModalFilter)
-                    .map(decree => {
-                      const isRead = readNoticeIds.includes(decree.id);
-                      return (
-                        <div
-                          key={decree.id}
-                          onClick={() => handleMarkNoticeAsRead(decree.id)}
-                          className={`p-4 rounded-2xl border-2 transition cursor-pointer space-y-1.5 ${
-                            isRead
-                              ? 'bg-[#FAF3E3]/60 border-[#382215]/30 opacity-60 shadow-2xs'
-                              : 'bg-[#FFFDF8] border-[#382215] shadow-[3px_3px_0px_#382215]'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              {!isRead && (
-                                <span className="px-1.5 py-0.2 rounded bg-[#C8532B] text-white text-[9px] font-black animate-pulse">
-                                  MỚI
-                                </span>
-                              )}
-                              <span className={`font-black text-sm ${isRead ? 'text-[#382215]/70' : 'text-[#382215]'}`}>
-                                {decree.title}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {isRead && (
-                                <span className="text-[10px] font-bold text-[#486A39]">
-                                  ✓ Đã đọc
-                                </span>
-                              )}
-                              <span
-                                className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black border border-[#382215] ${
-                                  decree.type === 'urgent'
-                                    ? 'bg-[#C8532B] text-white'
-                                    : decree.type === 'award'
-                                    ? 'bg-[#E5A140] text-[#382215]'
-                                    : 'bg-[#245351] text-[#FFE29A]'
-                                }`}
-                              >
-                                {decree.type === 'urgent' ? '⚡ Khẩn cấp' : decree.type === 'award' ? '🏆 Khen thưởng' : '📢 Thông tri chung'}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="text-xs text-[#5C432C] leading-relaxed">{decree.content}</p>
-                          <div className="text-[10px] font-bold text-[#6E472B]">
-                            Ban bố bởi: {decree.issuedBy} • {decree.issuedAt}
-                          </div>
-                        </div>
-                      );
-                    })
-                )}
-              </div>
-            </div>
-
-            <div className="p-4 bg-[#F2E5C9] border-t-2 border-[#382215] flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsDecreeNoticeModalOpen(false);
-                  setActiveTab('command');
-                }}
-                className="px-3.5 py-2 rounded-xl bg-[#245351] text-[#FFE29A] text-xs font-black border-2 border-[#382215] cursor-pointer"
-              >
-                Mở Sắc Lệnh Thông Tri (Mục Kế Hoạch)
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsDecreeNoticeModalOpen(false)}
-                className="px-5 py-2 rounded-xl bg-[#C8532B] hover:bg-[#A63E1B] text-white text-xs font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
-              >
-                Đã Xem & Đóng
-              </button>
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      {/* Emergency Notice Broadcast Banner (Thông Báo Khẩn Cấp do Chủ nhiệm / Phó Chủ nhiệm ban hành) */}
       <EmergencyNoticeBanner
         notices={emergencyNotices}
         currentUser={currentUser}
@@ -2095,7 +1805,6 @@ export default function App() {
         onDeleteNotice={handleDeleteEmergencyNotice}
       />
 
-      {/* Main Application Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 pt-5 pb-10">
         {activeTab === 'feed' && (
           <>
@@ -2159,6 +1868,15 @@ export default function App() {
             onAssignRole={handleAssignRole}
             onApproveDepartment={handleApproveDepartment}
             onRejectDepartment={handleRejectDepartment}
+          />
+        )}
+
+        {activeTab === 'surveys' && (
+          <SurveyMinutesSection
+            currentUser={currentUser}
+            isBcnMode={isBcnMode}
+            userList={userList}
+            onSaveMinutesToArchive={handleAddPlan}
           />
         )}
 
@@ -2241,98 +1959,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Ngữ Văn Book Cover Inspired Footer */}
-      <footer className="border-t-2 border-[#382215]/30 bg-[#FAF3E3] pt-7 pb-5 px-4 sm:px-6 mt-auto shadow-inner">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-5 text-xs text-[#5C432C]">
-          <div className="flex items-center gap-3.5">
-            <img 
-              src="/assets/aistudio/TUYE__N_THA_NH_VIE_N_778c37b9.png" 
-              alt="Logo CLB Đọc và Giới thiệu sách" 
-              className="h-11 sm:h-14 w-auto object-contain rounded-full shrink-0"
-            />
-            <div>
-              <div className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-[#245351] leading-tight">
-                Hội sinh viên Trường Đại học An Giang
-              </div>
-              <div className="font-extrabold text-xs sm:text-sm text-[#382215] font-serif-vintage leading-tight">
-                Câu lạc bộ Đọc và Giới thiệu sách
-              </div>
-              <div className="text-[10px] sm:text-[11px] text-[#6B4E35] flex items-center gap-1 mt-0.5 font-medium">
-                <MapPin className="w-3 h-3 text-[#C8532B] shrink-0" />
-                <span>Địa điểm: Trường Đại học An Giang</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-xs font-bold">
-            <button 
-              type="button" 
-              onClick={() => setIsWelcomeGuideOpen(true)} 
-              className="hover:text-[#C8532B] transition cursor-pointer text-[#8C3B1E]"
-            >
-              Hướng Dẫn Sử Dụng
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('feed')} 
-              className="hover:text-[#C8532B] transition cursor-pointer"
-            >
-              Bản Tin E-News
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('command')} 
-              className="hover:text-[#C8532B] transition cursor-pointer text-[#382215]"
-            >
-              Kế Hoạch & BCN
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('s5t')} 
-              className="hover:text-[#C8532B] transition cursor-pointer"
-            >
-              Sinh Viên 5 Tốt
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('vault')} 
-              className="hover:text-[#C8532B] transition cursor-pointer"
-            >
-              Két Quỹ BCN
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('org')} 
-              className="hover:text-[#C8532B] transition cursor-pointer"
-            >
-              Sơ Đồ 4 Ban
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setActiveTab('fame')} 
-              className="hover:text-[#C8532B] transition cursor-pointer text-[#9A3A1B]"
-            >
-              Bảo Tàng Thành Tựu
-            </button>
-            <button 
-              type="button" 
-              onClick={handleLogout} 
-              className="hover:text-[#A83E1B] transition cursor-pointer flex items-center gap-1 text-[#C8532B]"
-              title="Đăng xuất khỏi hệ thống"
-            >
-              <LogOut className="w-3 h-3" />
-              Đăng Xuất
-            </button>
-          </div>
-
-          <div className="text-center md:text-right text-[10px] sm:text-[11px] text-[#6B4E35]">
-            <p className="font-bold text-[#382215]">Định vị tư duy, bản lĩnh tri thức</p>
-            <p className="mt-0.5">Địa điểm: Trường Đại học An Giang</p>
-          </div>
-        </div>
-      </footer>
-
-      {/* Welcome & Onboarding Guide Modal (Appears on first login or when clicking "Hướng Dẫn") */}
       <WelcomeGuideModal
         isOpen={isWelcomeGuideOpen}
         onClose={handleCloseWelcomeGuide}
@@ -2341,7 +1967,6 @@ export default function App() {
         onNavigateTab={(tab: ActiveTab) => setActiveTab(tab)}
       />
 
-      {/* Authentication, Registration & BCN Portal Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
@@ -2358,7 +1983,6 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {/* Succession & Term Assignment Modal for BCN Turnovers */}
       <SuccessionModal
         isOpen={isSuccessionModalOpen}
         onClose={() => setIsSuccessionModalOpen(false)}
@@ -2370,7 +1994,6 @@ export default function App() {
         onAppointFullTerm={handleAppointFullTerm}
       />
 
-      {/* Push Toast Notification System Dedicated to Ban Chủ Nhiệm */}
       <BcnToastManager
         currentUser={currentUser}
         isBcnMode={isBcnMode}
@@ -2380,69 +2003,6 @@ export default function App() {
         reports={reports}
         onNavigateTab={(tab: ActiveTab) => setActiveTab(tab)}
       />
-
-      {/* 24-HOUR JSON BACKUP REMINDER MODAL FOR ACCOUNT CHÍNH */}
-      {is24hBackupReminderOpen && isMasterRoot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-[#FAF3E3] rounded-3xl border-3 border-[#382215] shadow-[8px_8px_0px_#382215] w-full max-w-lg overflow-hidden flex flex-col">
-            <div className="bg-[#C8532B] text-white p-4.5 flex items-center justify-between border-b-3 border-[#382215]">
-              <div className="flex items-center gap-2.5">
-                <span className="px-2 py-0.5 rounded-full bg-[#FFE29A] text-[#382215] text-[10px] font-black uppercase animate-pulse">
-                  ⏰ 24H CHU KỲ SAO LƯU
-                </span>
-                <div>
-                  <h4 className="font-black text-base font-serif-vintage">
-                    Nhắc Nhở Tải Dự Phòng JSON (Account Chính)
-                  </h4>
-                  <p className="text-[11px] text-[#FFE29A] font-semibold">
-                    Chu kỳ 24 giờ sao lưu bảo vệ dữ liệu CLB
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIs24hBackupReminderOpen(false)}
-                className="p-1.5 rounded-xl bg-black/20 hover:bg-black/30 text-white cursor-pointer font-black"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4 text-xs text-[#382215]">
-              <div className="p-4 rounded-2xl bg-[#FFFDF8] border-2 border-[#C8532B] shadow-[3px_3px_0px_#382215] space-y-2">
-                <div className="font-black text-sm text-[#C8532B] flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-[#C8532B]" />
-                  <span>Bảo Tồn Toàn Bộ Dữ Liệu CLB Định Kỳ 24 Giờ</span>
-                </div>
-                <p className="text-xs text-[#382215] leading-relaxed">
-                  Hiện đã qua <strong>{hoursSinceLastBackup} giờ</strong> kể từ lần sao lưu gần nhất. Để đảm bảo dữ liệu CLB (thành viên, mật khẩu, bài viết, locket, kế hoạch, két quỹ) được bảo vệ tuyệt đối, vui lòng bấm nút bên dưới để tải về file <code>.json</code> dự phòng.
-                </p>
-                <p className="text-[11px] font-bold text-[#245351] bg-[#F2E5C9] p-2.5 rounded-xl border border-[#382215]/20">
-                  ⚡ Ngay sau khi bấm tải về, hệ thống sẽ tự động khởi tạo lại chu kỳ 24 giờ tiếp theo.
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIs24hBackupReminderOpen(false)}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-[#F2E5C9] text-[#382215] font-black border-2 border-[#382215] cursor-pointer"
-                >
-                  Nhắc Tôi Sau
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDownloadBackupAndReset24h}
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-2xl bg-[#C8532B] hover:bg-[#A63E1B] text-white font-black border-2 border-[#382215] shadow-[4px_4px_0px_#382215] flex items-center justify-center gap-2 cursor-pointer transition"
-                >
-                  <Download className="w-4 h-4 text-[#FFE29A]" />
-                  <span>Tải File JSON & Khởi Tạo Chu Kỳ 24h Mới</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
