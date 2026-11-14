@@ -148,7 +148,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     }
   };
 
-  // Builder Modal States
   const [isCreateSurveyOpen, setIsCreateSurveyOpen] = useState(false);
   const [surveyTitle, setSurveyTitle] = useState('');
   const [surveyDesc, setSurveyDesc] = useState('');
@@ -171,7 +170,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     }
   ]);
 
-  // Response Answers Map: surveyId -> questionId -> value
   const [userDraftAnswers, setUserDraftAnswers] = useState<Record<string, Record<string, string | string[]>>>({});
 
   const handleAddDraftQuestion = () => {
@@ -212,7 +210,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     setIsCreateSurveyOpen(false);
     setSurveyTitle('');
     setSurveyDesc('');
-    setBannerMsg(`Đã phát hành phiếu khảo sát "${newPoll.title}" (${newPoll.anonymityMode === 'anonymous' ? 'Chế độ Ẩn danh' : 'Công khai danh tính'})!`);
+    setBannerMsg(`Đã phát hành phiếu khảo sát "${newPoll.title}"!`);
     setTimeout(() => setBannerMsg(null), 5000);
   };
 
@@ -256,7 +254,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   };
 
   // =========================================================================
-  // PHẦN 2: TRÌNH TẠO BIÊN BẢN CUỘC HỌP THEO ĐÚNG MẪU BCN CLB ĐỌC SÁCH AGU
+  // PHẦN 2: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN A4 ĐOÀN - HỘI (KHÔNG QUỐC HIỆU)
   // =========================================================================
   const todayObj = new Date();
   const [docNumber, setDocNumber] = useState('01/BB-CLB');
@@ -280,6 +278,8 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     'Đồng chí Chủ tọa tuyên bố lý do tổ chức cuộc họp, giới thiệu đại biểu tham dự và thông qua chương trình làm việc của hội nghị.'
   );
 
+  // Công tắc bật/tắt mục 2 (Thảo luận) và mục 3 (Biểu quyết) — xóa hết hoặc tắt là biến mất sạch khỏi biên bản
+  const [includeDiscussions, setIncludeDiscussions] = useState<boolean>(true);
   const [discussions, setDiscussions] = useState<DiscussionOpinionRow[]>([
     {
       id: 'disc-1',
@@ -288,6 +288,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     }
   ]);
 
+  const [includeVoting, setIncludeVoting] = useState<boolean>(true);
   const [voteRows, setVoteRows] = useState<VoteTableRow[]>([
     {
       id: 'vr-1',
@@ -306,6 +307,13 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
 
   const absentCount = Math.max(0, totalSummoned - totalPresent);
   const attendancePercent = totalSummoned > 0 ? ((totalPresent / totalSummoned) * 100).toFixed(1) : '100';
+
+  const validDiscussions = includeDiscussions
+    ? discussions.filter((d) => d.speaker.trim() || d.content.trim())
+    : [];
+  const validVoteRows = includeVoting
+    ? voteRows.filter((r) => r.fullName.trim() || r.roleOrContent.trim())
+    : [];
 
   const handlePrintMinutes = () => {
     window.print();
@@ -326,13 +334,13 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
       assignedDept: 'Nhân sự & Kế hoạch' as DepartmentType,
       description: summaryText,
       timeline: `${academicYear} · Ngày ${docDay}/${docMonth}/${docYear}`,
-      targetAudience: 'Ban Chủ Nhiệm & Toàn thể Hội viên CLB',
+      targetAudience: `Số: ${docNumber}`,
       priority: 'high' as const,
       status: 'approved' as const,
       archivedAt: `${docDay}/${docMonth}/${docYear}`,
       createdAt: `${docDay}/${docMonth}/${docYear}`,
       budgetEstimate: 0,
-      actionItems: discussions.map((d) => `${d.speaker}: ${d.content}`)
+      actionItems: validDiscussions.map((d) => `${d.speaker}: ${d.content}`)
     });
 
     confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
@@ -342,6 +350,37 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* CSS CHUYÊN BIỆT KHI IN PDF: Ẩn toàn bộ giao diện web, chỉ in trọn vẹn tờ A4 */}
+      <style>{`
+        @media print {
+          @page {
+            size: A4 portrait;
+            margin: 18mm 18mm 18mm 22mm;
+          }
+          body * {
+            visibility: hidden !important;
+          }
+          #printable-minutes-a4,
+          #printable-minutes-a4 * {
+            visibility: visible !important;
+          }
+          #printable-minutes-a4 {
+            position: fixed !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+            box-shadow: none !important;
+            border: none !important;
+            overflow: visible !important;
+          }
+        }
+      `}</style>
+
       {/* Header Banner */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="space-y-1.5 max-w-2xl">
@@ -352,7 +391,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
             Khảo Sát Ý Kiến, Biểu Quyết & Biên Bản Cuộc Họp
           </h2>
           <p className="text-xs sm:text-sm text-[#4A3525] leading-relaxed">
-            Tạo phiếu khảo sát đóng góp ý kiến (<strong>ẩn danh hoặc công khai danh tính</strong> tùy tính chất cuộc họp) và lập <strong>Biên bản cuộc họp chuẩn thể thức BCN CLB</strong>.
+            Tạo phiếu khảo sát đóng góp ý kiến (<strong>ẩn danh hoặc công khai danh tính</strong>) và lập <strong>Biên bản cuộc họp chuẩn khổ A4</strong>.
           </p>
         </div>
 
@@ -424,9 +463,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
             <div className="p-10 text-center rounded-3xl bg-[#FAF3E3] border-2 border-dashed border-[#382215]/30 space-y-2">
               <Vote className="w-10 h-10 text-[#6E472B]/50 mx-auto" />
               <div className="font-black text-sm text-[#382215]">Chưa có phiếu khảo sát hay biểu quyết nào</div>
-              <p className="text-xs text-[#6E472B]">
-                Ban Chủ Nhiệm có thể bấm nút <strong>"Tạo Form Khảo Sát / Biểu Quyết Mới"</strong> để lấy ý kiến toàn thể CLB.
-              </p>
             </div>
           ) : (
             <div className="space-y-6">
@@ -477,7 +513,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                       </div>
                     </div>
 
-                    {/* Khu vực thành viên điền câu trả lời */}
                     {!isAlumniViewerOnly && (
                       <div className="space-y-3 bg-[#FFFDF8] p-4 rounded-2xl border-2 border-[#382215]/20">
                         {poll.questions.map((q, qIdx) => (
@@ -549,7 +584,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                       </div>
                     )}
 
-                    {/* Bảng tổng hợp kết quả biểu quyết trực quan */}
                     {poll.responses.length > 0 && (
                       <div className="p-4 rounded-2xl bg-[#F2E5C9] border-2 border-[#382215]/30 space-y-3 text-xs">
                         <div className="flex items-center gap-1.5 font-black text-[#245351] uppercase">
@@ -612,7 +646,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
       )}
 
       {/* =========================================================================
-          TAB B: TRÌNH TẠO BIÊN BẢN CUỘC HỌP THEO ĐÚNG MẪU BCN CLB ĐỌC SÁCH AGU
+          TAB B: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN A4 ĐOÀN - HỘI
          ========================================================================= */}
       {subTab === 'minutes' && (
         <div className="space-y-6">
@@ -634,7 +668,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                   className="px-4 py-2 rounded-xl bg-[#245351] text-[#FFE29A] font-black text-xs flex items-center gap-1.5 border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>Xem Văn Bản Chuẩn & In PDF</span>
+                  <span>Xem Văn Bản A4 & In PDF</span>
                 </button>
 
                 {isBcnLeader && onSaveMinutesToArchive && (
@@ -820,9 +854,9 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
               </div>
             </div>
 
-            {/* 4. Nội dung cuộc họp & Thảo luận */}
-            <div className="p-4 rounded-2xl bg-[#FFFDF8] border-2 border-[#382215]/20 space-y-3 text-xs">
-              <div className="font-black text-[#245351] uppercase">II. Nội Dung Cuộc Họp & Ý Kiến Thảo Luận</div>
+            {/* 4. Nội dung cuộc họp & Tùy chọn Bật/Tắt Mục 2 & Mục 3 */}
+            <div className="p-4 rounded-2xl bg-[#FFFDF8] border-2 border-[#382215]/20 space-y-4 text-xs">
+              <div className="font-black text-[#245351] uppercase">II. Nội Dung Cuộc Họp</div>
               <div>
                 <label className="block font-bold mb-1">1. Tuyên bố lý do, giới thiệu đại biểu và thông qua chương trình:</label>
                 <textarea
@@ -833,150 +867,183 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 />
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold">2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDiscussions((prev) => [
-                        ...prev,
-                        { id: `disc-${Date.now()}`, speaker: '', content: '' }
-                      ])
-                    }
-                    className="px-2.5 py-1 rounded-lg bg-[#245351] text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Thêm ý kiến
-                  </button>
-                </div>
+              {/* MỤC 2: Ý KIẾN THẢO LUẬN (CÓ NÚT XÓA / ẨN MỤC NẾU CUỘC HỌP KHÔNG CÓ) */}
+              <div className="p-3.5 rounded-xl bg-[#FAF3E3] border border-[#382215]/20 space-y-2.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <label className="flex items-center gap-2 font-black text-[#382215] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={includeDiscussions}
+                      onChange={(e) => setIncludeDiscussions(e.target.checked)}
+                      className="rounded text-[#245351]"
+                    />
+                    <span>2. Các ý kiến trao đổi, thảo luận tại cuộc họp (Bỏ tick nếu không có mục này)</span>
+                  </label>
 
-                {discussions.map((d, idx) => (
-                  <div key={d.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-start">
-                    <input
-                      type="text"
-                      value={d.speaker}
-                      onChange={(e) =>
-                        setDiscussions((prev) =>
-                          prev.map((item) => (item.id === d.id ? { ...item, speaker: e.target.value } : item))
-                        )
-                      }
-                      placeholder={`Họ tên / Bộ phận (${idx + 1})`}
-                      className="sm:col-span-4 px-3 py-2 rounded-xl border bg-white font-bold"
-                    />
-                    <input
-                      type="text"
-                      value={d.content}
-                      onChange={(e) =>
-                        setDiscussions((prev) =>
-                          prev.map((item) => (item.id === d.id ? { ...item, content: e.target.value } : item))
-                        )
-                      }
-                      placeholder="Nội dung ý kiến đóng góp, thảo luận..."
-                      className="sm:col-span-7 px-3 py-2 rounded-xl border bg-white"
-                    />
+                  {includeDiscussions && (
                     <button
                       type="button"
-                      onClick={() => setDiscussions((prev) => prev.filter((item) => item.id !== d.id))}
-                      className="sm:col-span-1 p-2 text-rose-600 cursor-pointer"
+                      onClick={() =>
+                        setDiscussions((prev) => [
+                          ...prev,
+                          { id: `disc-${Date.now()}`, speaker: '', content: '' }
+                        ])
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-[#245351] text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Plus className="w-3 h-3" /> Thêm ý kiến
                     </button>
+                  )}
+                </div>
+
+                {includeDiscussions && (
+                  <div className="space-y-2">
+                    {discussions.map((d, idx) => (
+                      <div key={d.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-start">
+                        <input
+                          type="text"
+                          value={d.speaker}
+                          onChange={(e) =>
+                            setDiscussions((prev) =>
+                              prev.map((item) => (item.id === d.id ? { ...item, speaker: e.target.value } : item))
+                            )
+                          }
+                          placeholder={`Họ tên / Bộ phận (${idx + 1})`}
+                          className="sm:col-span-4 px-3 py-2 rounded-xl border bg-white font-bold"
+                        />
+                        <input
+                          type="text"
+                          value={d.content}
+                          onChange={(e) =>
+                            setDiscussions((prev) =>
+                              prev.map((item) => (item.id === d.id ? { ...item, content: e.target.value } : item))
+                            )
+                          }
+                          placeholder="Nội dung ý kiến đóng góp, thảo luận..."
+                          className="sm:col-span-7 px-3 py-2 rounded-xl border bg-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setDiscussions((prev) => prev.filter((item) => item.id !== d.id))}
+                          className="sm:col-span-1 p-2 text-rose-600 cursor-pointer"
+                          title="Xóa ý kiến này"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
 
-              {/* 3. Bảng Biểu Quyết / Quyết Nghị */}
-              <div className="space-y-2 pt-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold">3. Bảng Biểu Quyết / Quyết Nghị của Hội Nghị:</label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setVoteRows((prev) => [
-                        ...prev,
-                        {
-                          id: `vr-${Date.now()}`,
-                          fullName: '',
-                          branch: 'CLB Đọc Sách AGU',
-                          roleOrContent: '',
-                          votesFor: totalPresent,
-                          totalVotes: totalPresent
-                        }
-                      ])
-                    }
-                    className="px-2.5 py-1 rounded-lg bg-[#C8532B] text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Thêm dòng biểu quyết
-                  </button>
-                </div>
+              {/* MỤC 3: BIỂU QUYẾT / QUYẾT NGHỊ (CÓ NÚT XÓA / ẨN MỤC NẾU CUỘC HỌP KHÔNG CÓ) */}
+              <div className="p-3.5 rounded-xl bg-[#FAF3E3] border border-[#382215]/20 space-y-2.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <label className="flex items-center gap-2 font-black text-[#382215] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={includeVoting}
+                      onChange={(e) => setIncludeVoting(e.target.checked)}
+                      className="rounded text-[#C8532B]"
+                    />
+                    <span>3. Biểu quyết / Quyết nghị của hội nghị (Bỏ tick nếu không có mục này)</span>
+                  </label>
 
-                {voteRows.map((row, idx) => (
-                  <div key={row.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-[#FAF3E3] p-2.5 rounded-xl border">
-                    <input
-                      type="text"
-                      value={row.fullName}
-                      onChange={(e) =>
-                        setVoteRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, fullName: e.target.value } : r))
-                        )
-                      }
-                      placeholder={`${idx + 1}. Họ và tên / Nội dung`}
-                      className="sm:col-span-3 px-2.5 py-1.5 rounded-lg border bg-white font-bold"
-                    />
-                    <input
-                      type="text"
-                      value={row.branch}
-                      onChange={(e) =>
-                        setVoteRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, branch: e.target.value } : r))
-                        )
-                      }
-                      placeholder="Chi hội"
-                      className="sm:col-span-2 px-2.5 py-1.5 rounded-lg border bg-white"
-                    />
-                    <input
-                      type="text"
-                      value={row.roleOrContent}
-                      onChange={(e) =>
-                        setVoteRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, roleOrContent: e.target.value } : r))
-                        )
-                      }
-                      placeholder="Chức vụ / Nội dung"
-                      className="sm:col-span-4 px-2.5 py-1.5 rounded-lg border bg-white"
-                    />
-                    <div className="sm:col-span-2 flex items-center gap-1">
-                      <input
-                        type="number"
-                        value={row.votesFor}
-                        onChange={(e) =>
-                          setVoteRows((prev) =>
-                            prev.map((r) => (r.id === row.id ? { ...r, votesFor: Number(e.target.value) } : r))
-                          )
-                        }
-                        className="w-12 px-1.5 py-1.5 rounded-lg border bg-white text-center font-bold"
-                      />
-                      <span>/</span>
-                      <input
-                        type="number"
-                        value={row.totalVotes}
-                        onChange={(e) =>
-                          setVoteRows((prev) =>
-                            prev.map((r) => (r.id === row.id ? { ...r, totalVotes: Number(e.target.value) } : r))
-                          )
-                        }
-                        className="w-12 px-1.5 py-1.5 rounded-lg border bg-white text-center font-bold"
-                      />
-                    </div>
+                  {includeVoting && (
                     <button
                       type="button"
-                      onClick={() => setVoteRows((prev) => prev.filter((r) => r.id !== row.id))}
-                      className="sm:col-span-1 text-rose-600 flex justify-center cursor-pointer"
+                      onClick={() =>
+                        setVoteRows((prev) => [
+                          ...prev,
+                          {
+                            id: `vr-${Date.now()}`,
+                            fullName: '',
+                            branch: 'CLB Đọc Sách AGU',
+                            roleOrContent: '',
+                            votesFor: totalPresent,
+                            totalVotes: totalPresent
+                          }
+                        ])
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-[#C8532B] text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Plus className="w-3 h-3" /> Thêm dòng biểu quyết
                     </button>
+                  )}
+                </div>
+
+                {includeVoting && (
+                  <div className="space-y-2">
+                    {voteRows.map((row, idx) => (
+                      <div key={row.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white p-2.5 rounded-xl border">
+                        <input
+                          type="text"
+                          value={row.fullName}
+                          onChange={(e) =>
+                            setVoteRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, fullName: e.target.value } : r))
+                            )
+                          }
+                          placeholder={`${idx + 1}. Họ và tên / Nội dung`}
+                          className="sm:col-span-3 px-2.5 py-1.5 rounded-lg border bg-white font-bold"
+                        />
+                        <input
+                          type="text"
+                          value={row.branch}
+                          onChange={(e) =>
+                            setVoteRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, branch: e.target.value } : r))
+                            )
+                          }
+                          placeholder="Chi hội"
+                          className="sm:col-span-2 px-2.5 py-1.5 rounded-lg border bg-white"
+                        />
+                        <input
+                          type="text"
+                          value={row.roleOrContent}
+                          onChange={(e) =>
+                            setVoteRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, roleOrContent: e.target.value } : r))
+                            )
+                          }
+                          placeholder="Chức vụ / Nội dung"
+                          className="sm:col-span-4 px-2.5 py-1.5 rounded-lg border bg-white"
+                        />
+                        <div className="sm:col-span-2 flex items-center gap-1">
+                          <input
+                            type="number"
+                            value={row.votesFor}
+                            onChange={(e) =>
+                              setVoteRows((prev) =>
+                                prev.map((r) => (r.id === row.id ? { ...r, votesFor: Number(e.target.value) } : r))
+                              )
+                            }
+                            className="w-12 px-1.5 py-1.5 rounded-lg border bg-white text-center font-bold"
+                          />
+                          <span>/</span>
+                          <input
+                            type="number"
+                            value={row.totalVotes}
+                            onChange={(e) =>
+                              setVoteRows((prev) =>
+                                prev.map((r) => (r.id === row.id ? { ...r, totalVotes: Number(e.target.value) } : r))
+                              )
+                            }
+                            className="w-12 px-1.5 py-1.5 rounded-lg border bg-white text-center font-bold"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setVoteRows((prev) => prev.filter((r) => r.id !== row.id))}
+                          className="sm:col-span-1 text-rose-600 flex justify-center cursor-pointer"
+                          title="Xóa dòng này"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             </div>
 
@@ -1037,7 +1104,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                   required
                   value={surveyTitle}
                   onChange={(e) => setSurveyTitle(e.target.value)}
-                  placeholder="Ví dụ: Lấy ý kiến tổ chức Ngày hội Văn hóa đọc Học kỳ II..."
                   className="w-full px-3 py-2 rounded-xl border-2 border-[#382215]/30 bg-white font-bold"
                 />
               </div>
@@ -1067,16 +1133,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-[#382215] mb-1">Mô tả mục đích khảo sát</label>
-                <textarea
-                  rows={2}
-                  value={surveyDesc}
-                  onChange={(e) => setSurveyDesc(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border bg-white"
-                />
-              </div>
-
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-black text-[#382215]">Danh sách câu hỏi khảo sát:</span>
@@ -1102,7 +1158,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                             prev.map((item) => (item.id === q.id ? { ...item, text: e.target.value } : item))
                           )
                         }
-                        placeholder="Nhập nội dung câu hỏi..."
                         className="flex-1 px-2.5 py-1.5 rounded-lg border font-bold"
                       />
                       <select
@@ -1134,7 +1189,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                             )
                           )
                         }
-                        placeholder="Các phương án cách nhau bởi dấu phẩy (VD: Tán thành, Không tán thành)"
                         className="w-full px-2.5 py-1.5 rounded-lg border bg-[#FAF3E3]/50"
                       />
                     )}
@@ -1162,20 +1216,20 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
         </div>
       )}
 
-      {/* MODAL XEM TRƯỚC & IN PDF BIÊN BẢN CUỘC HỌP CHUẨN THỂ THỨC HÀNH CHÍNH */}
+      {/* MODAL XEM TRƯỚC & IN PDF BIÊN BẢN CUỘC HỌP CHUẨN A4 (KHÔNG QUỐC HIỆU, KHÔNG CHỮ THỪA) */}
       {isPreviewMinutesOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[92vh] overflow-hidden flex flex-col shadow-2xl">
-            <div className="bg-[#382215] text-white px-5 py-3.5 flex items-center justify-between">
-              <span className="font-bold text-sm">Bản Xem Trước Biên Bản Cuộc Họp (Khổ A4 • Times New Roman)</span>
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[94vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="bg-[#382215] text-white px-5 py-3.5 flex items-center justify-between print:hidden">
+              <span className="font-bold text-sm">Khổ A4 • Times New Roman (Chuẩn Văn Bản Hội Sinh Viên)</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handlePrintMinutes}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 text-stone-950 font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-1.5 rounded-xl bg-amber-400 text-stone-950 font-black text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>In / Lưu PDF</span>
+                  <span>In / Xuất File PDF A4</span>
                 </button>
                 <button type="button" onClick={() => setIsPreviewMinutesOpen(false)} className="cursor-pointer">
                   <X className="w-5 h-5" />
@@ -1183,31 +1237,34 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
               </div>
             </div>
 
-            <div className="p-8 sm:p-12 overflow-y-auto text-black leading-relaxed" style={{ fontFamily: '"Times New Roman", Times, serif', fontSize: '14pt' }}>
-              <div className="grid grid-cols-2 gap-4 text-center mb-4">
-                <div>
+            {/* VÙNG IN A4 SẠCH SẼ */}
+            <div
+              id="printable-minutes-a4"
+              className="p-8 sm:p-12 overflow-y-auto text-black leading-relaxed bg-white"
+              style={{ fontFamily: '"Times New Roman", Times, serif', fontSize: '13.5pt' }}
+            >
+              {/* Tiêu đề hành chính Hội Sinh Viên (KHÔNG dùng Quốc hiệu) */}
+              <div className="flex items-start justify-between gap-4 mb-5">
+                <div className="text-center">
                   <div className="font-bold uppercase text-[12pt]">HỘI SINH VIÊN TRƯỜNG ĐẠI HỌC AN GIANG</div>
                   <div className="font-bold uppercase text-[12pt]">BCN CLB ĐỌC VÀ GIỚI THIỆU SÁCH</div>
-                  <div className="font-bold">***</div>
-                  <div className="mt-1 text-[13pt]">Số: {docNumber}</div>
+                  <div className="font-bold leading-none mt-1">***</div>
+                  <div className="mt-1.5 text-[13pt]">Số: {docNumber}</div>
                   <div className="italic text-[12pt]">({academicYear})</div>
                 </div>
-                <div className="flex flex-col justify-between">
-                  <div className="font-bold uppercase text-[12pt]">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
-                  <div className="font-bold underline text-[13pt]">Độc lập - Tự do - Hạnh phúc</div>
-                  <div className="italic mt-2 text-[13pt]">
-                    An Giang, ngày {docDay} tháng {docMonth} năm {docYear}
-                  </div>
+
+                <div className="text-right italic text-[13pt] pt-1">
+                  An Giang, ngày {docDay} tháng {docMonth} năm {docYear}
                 </div>
               </div>
 
-              <div className="text-center my-6">
+              <div className="text-center my-5">
                 <div className="font-bold uppercase text-[15pt]">BIÊN BẢN</div>
-                <div className="font-bold text-[14pt]">{meetingTitle}</div>
-                <div>--------------------------------------------</div>
+                <div className="font-bold text-[14pt] mt-0.5">{meetingTitle}</div>
+                <div className="mt-1">--------------------------------------------</div>
               </div>
 
-              <div className="space-y-2.5 text-justify">
+              <div className="space-y-2 text-justify">
                 <p>
                   <strong>1. Thời gian:</strong> Vào lúc {startHour} giờ {startMinute} phút, ngày {docDay} tháng {docMonth} năm {docYear}.
                 </p>
@@ -1219,8 +1276,8 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 </p>
                 <ul className="list-none pl-4 space-y-1">
                   <li>- Chủ tọa: {chairName} - {chairRole}.</li>
-                  <li>- Thư ký: {secretaryName || '[Họ và tên thư ký]'} - Thư ký cuộc họp.</li>
-                  <li>- Khách mời / Đại biểu (nếu có): {guests}.</li>
+                  <li>- Thư ký: {secretaryName || '........................................'} - Thư ký cuộc họp.</li>
+                  {guests.trim() && <li>- Khách mời / Đại biểu: {guests}.</li>}
                   <li>
                     - Tổng số hội viên/thành viên triệu tập: {totalSummoned} hội viên. Có mặt: {totalPresent} hội viên (đạt tỷ lệ {attendancePercent}%). Vắng: {absentReasonNote}.
                   </li>
@@ -1232,51 +1289,61 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 </p>
                 <p className="pl-4">{openingReason}</p>
 
-                <p>
-                  <strong>2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</strong>
-                </p>
-                <div className="pl-4 space-y-1">
-                  {discussions.map((d) => (
-                    <p key={d.id}>
-                      - Ý kiến của {d.speaker || '...'}: {d.content || '...'}
+                {/* Chỉ hiển thị Mục 2 khi có dữ liệu và được bật */}
+                {validDiscussions.length > 0 && (
+                  <>
+                    <p>
+                      <strong>2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</strong>
                     </p>
-                  ))}
-                </div>
+                    <div className="pl-4 space-y-1">
+                      {validDiscussions.map((d) => (
+                        <p key={d.id}>
+                          - Ý kiến của {d.speaker}: {d.content}
+                        </p>
+                      ))}
+                    </div>
+                  </>
+                )}
 
-                <p>
-                  <strong>3. Biểu quyết / Quyết nghị của hội nghị:</strong>
-                </p>
-                <p className="pl-4">
-                  Hội nghị tiến hành biểu quyết đối với các nội dung/danh sách dự kiến. Kết quả cụ thể như sau:
-                </p>
+                {/* Chỉ hiển thị Mục 3 khi có dữ liệu và được bật */}
+                {validVoteRows.length > 0 && (
+                  <>
+                    <p>
+                      <strong>{validDiscussions.length > 0 ? '3.' : '2.'} Biểu quyết / Quyết nghị của hội nghị:</strong>
+                    </p>
+                    <p className="pl-4">
+                      Hội nghị tiến hành biểu quyết đối với các nội dung/danh sách dự kiến. Kết quả cụ thể như sau:
+                    </p>
 
-                <table className="w-full border-collapse border border-black text-[12pt] my-3">
-                  <thead>
-                    <tr className="bg-stone-100">
-                      <th className="border border-black px-2 py-1.5 text-center w-12">TT</th>
-                      <th className="border border-black px-2 py-1.5 text-left">Họ và tên / Nội dung</th>
-                      <th className="border border-black px-2 py-1.5 text-left">Chi hội</th>
-                      <th className="border border-black px-2 py-1.5 text-left">Chức vụ / Nội dung</th>
-                      <th className="border border-black px-2 py-1.5 text-center">Kết quả biểu quyết</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {voteRows.map((row, idx) => {
-                      const pct = row.totalVotes > 0 ? ((row.votesFor / row.totalVotes) * 100).toFixed(1) : '100';
-                      return (
-                        <tr key={row.id}>
-                          <td className="border border-black px-2 py-1.5 text-center">{idx + 1}</td>
-                          <td className="border border-black px-2 py-1.5">{row.fullName}</td>
-                          <td className="border border-black px-2 py-1.5">{row.branch}</td>
-                          <td className="border border-black px-2 py-1.5">{row.roleOrContent}</td>
-                          <td className="border border-black px-2 py-1.5 text-center">
-                            {row.votesFor}/{row.totalVotes} ({pct}%)
-                          </td>
+                    <table className="w-full border-collapse border border-black text-[12pt] my-3">
+                      <thead>
+                        <tr>
+                          <th className="border border-black px-2 py-1.5 text-center w-12">TT</th>
+                          <th className="border border-black px-2 py-1.5 text-left">Họ và tên / Nội dung</th>
+                          <th className="border border-black px-2 py-1.5 text-left">Chi hội</th>
+                          <th className="border border-black px-2 py-1.5 text-left">Chức vụ / Nội dung</th>
+                          <th className="border border-black px-2 py-1.5 text-center">Kết quả biểu quyết</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {validVoteRows.map((row, idx) => {
+                          const pct = row.totalVotes > 0 ? ((row.votesFor / row.totalVotes) * 100).toFixed(1) : '100';
+                          return (
+                            <tr key={row.id}>
+                              <td className="border border-black px-2 py-1.5 text-center">{idx + 1}</td>
+                              <td className="border border-black px-2 py-1.5">{row.fullName}</td>
+                              <td className="border border-black px-2 py-1.5">{row.branch}</td>
+                              <td className="border border-black px-2 py-1.5">{row.roleOrContent}</td>
+                              <td className="border border-black px-2 py-1.5 text-center">
+                                {row.votesFor}/{row.totalVotes} ({pct}%)
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                )}
 
                 <p className="font-bold pt-2">III. KẾT LUẬN CUỘC HỌP / THỐNG NHẤT CHUNG:</p>
                 <p>
@@ -1291,7 +1358,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 <div>
                   <div className="font-bold uppercase">THƯ KÝ</div>
                   <div className="italic text-[12pt]">(Đã ký)</div>
-                  <div className="font-bold mt-16">{secretaryName || '[Họ và tên thư ký]'}</div>
+                  <div className="font-bold mt-16">{secretaryName || ''}</div>
                 </div>
                 <div>
                   <div className="font-bold uppercase">CHỦ TỌA</div>
