@@ -12,10 +12,13 @@ import {
   BarChart3,
   FolderArchive,
   X,
-  Plus
+  Plus,
+  Download,
+  Camera
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserProfile, DepartmentType } from '../types';
+import { readFileAsDataUrl } from '../utils/imageUpload';
 import {
   isMasterRootUser,
   isClubPresidentUser,
@@ -76,6 +79,13 @@ interface VoteTableRow {
   totalVotes: number;
 }
 
+// Chỉ lấy chức vụ cao nhất, loại bỏ phần kiêm nhiệm phía sau
+const getHighestPositionOnly = (rawPos?: string): string => {
+  if (!rawPos) return 'Chủ nhiệm CLB';
+  const cleaned = rawPos.split(/[•·|-(]/)[0].trim();
+  return cleaned || 'Chủ nhiệm CLB';
+};
+
 export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   currentUser,
   isBcnMode,
@@ -97,7 +107,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     currentUser.clubRole === 'alumni_viewer' ||
     (Boolean(currentUser.isGraduated) && currentUser.clubRole !== 'former_bcn' && currentUser.canComment === false);
 
-  const [subTab, setSubTab] = useState<'surveys' | 'minutes'>('surveys');
+  const [subTab, setSubTab] = useState<'surveys' | 'minutes'>('minutes');
   const [bannerMsg, setBannerMsg] = useState<string | null>(null);
 
   // =========================================================================
@@ -199,7 +209,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
       academicYear: surveyAcademicYear.trim() || 'Năm học 2026 - 2027',
       anonymityMode: surveyAnonymity,
       status: 'open',
-      createdBy: `${currentUser.name} (${currentUser.position || 'BCN'})`,
+      createdBy: `${currentUser.name} (${getHighestPositionOnly(currentUser.position)})`,
       createdAt: new Date().toLocaleDateString('vi-VN'),
       questions: validQuestions,
       responses: []
@@ -254,11 +264,10 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   };
 
   // =========================================================================
-  // PHẦN 2: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN A4 ĐOÀN - HỘI (KHÔNG QUỐC HIỆU)
+  // PHẦN 2: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN THỂ THỨC A4 (LỀ 3-2-2-2)
   // =========================================================================
   const todayObj = new Date();
   const [docNumber, setDocNumber] = useState('01/BB-CLB');
-  const [academicYear, setAcademicYear] = useState('Năm học 2026 - 2027');
   const [docDay, setDocDay] = useState(String(todayObj.getDate()).padStart(2, '0'));
   const [docMonth, setDocMonth] = useState(String(todayObj.getMonth() + 1).padStart(2, '0'));
   const [docYear, setDocYear] = useState(String(todayObj.getFullYear()));
@@ -267,9 +276,10 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   const [startMinute, setStartMinute] = useState('30');
   const [location, setLocation] = useState('Phòng họp tầng 3 — Thư viện Trường Đại học An Giang');
   const [chairName, setChairName] = useState(currentUser.name);
-  const [chairRole, setChairRole] = useState(currentUser.position || 'Chủ nhiệm CLB Đọc và Giới thiệu sách');
+  // Chỉ lấy chức vụ cao nhất, không kèm chức danh kiêm nhiệm
+  const [chairRole, setChairRole] = useState(getHighestPositionOnly(currentUser.position));
   const [secretaryName, setSecretaryName] = useState('');
-  const [guests, setGuests] = useState('Đại diện Ban Thư ký Hội Sinh viên Trường Đại học An Giang (nếu có)');
+  const [guests, setGuests] = useState('');
   const [totalSummoned, setTotalSummoned] = useState<number>(Math.max(1, userList.filter((u) => u.id !== 'bcn-root').length));
   const [totalPresent, setTotalPresent] = useState<number>(Math.max(1, userList.filter((u) => u.id !== 'bcn-root').length));
   const [absentReasonNote, setAbsentReasonNote] = useState('0 hội viên (Có lý do: 0; Không lý do: 0)');
@@ -278,7 +288,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     'Đồng chí Chủ tọa tuyên bố lý do tổ chức cuộc họp, giới thiệu đại biểu tham dự và thông qua chương trình làm việc của hội nghị.'
   );
 
-  // Công tắc bật/tắt mục 2 (Thảo luận) và mục 3 (Biểu quyết) — xóa hết hoặc tắt là biến mất sạch khỏi biên bản
   const [includeDiscussions, setIncludeDiscussions] = useState<boolean>(true);
   const [discussions, setDiscussions] = useState<DiscussionOpinionRow[]>([
     {
@@ -305,6 +314,10 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   const [endMinute, setEndMinute] = useState('15');
   const [isPreviewMinutesOpen, setIsPreviewMinutesOpen] = useState(false);
 
+  // Ảnh chụp / Scan bản biên bản đã có chữ ký sống để tải ngược lên Kho Văn Kiện
+  const [signedMinutesScanImage, setSignedMinutesScanImage] = useState<string>('');
+  const [signedMinutesFileName, setSignedMinutesFileName] = useState<string>('');
+
   const absentCount = Math.max(0, totalSummoned - totalPresent);
   const attendancePercent = totalSummoned > 0 ? ((totalPresent / totalSummoned) * 100).toFixed(1) : '100';
 
@@ -315,72 +328,248 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     ? voteRows.filter((r) => r.fullName.trim() || r.roleOrContent.trim())
     : [];
 
-  const handlePrintMinutes = () => {
-    window.print();
+  // Xuất file Word (.doc) chuẩn khổ A4 lề Trái 30mm, Trên 20mm, Phải 20mm, Dưới 20mm, không có chữ "(Đã ký)" chết
+  const handleDownloadWordDoc = () => {
+    const discussionsHtml =
+      validDiscussions.length > 0
+        ? `
+          <p style="margin: 6pt 0 3pt 0;"><b>2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</b></p>
+          ${validDiscussions
+            .map(
+              (d) =>
+                `<p style="margin: 2pt 0 2pt 18pt; text-align: justify;">- Ý kiến của ${d.speaker}: ${d.content}</p>`
+            )
+            .join('')}
+        `
+        : '';
+
+    const votingSectionIndex = validDiscussions.length > 0 ? '3.' : '2.';
+    const votingHtml =
+      validVoteRows.length > 0
+        ? `
+          <p style="margin: 6pt 0 3pt 0;"><b>${votingSectionIndex} Biểu quyết / Quyết nghị của hội nghị:</b></p>
+          <p style="margin: 2pt 0 6pt 18pt; text-align: justify;">Hội nghị tiến hành biểu quyết đối với các nội dung/danh sách dự kiến. Kết quả cụ thể như sau:</p>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12pt; margin-bottom: 8pt;">
+            <thead>
+              <tr>
+                <th style="border: 1px solid #000; padding: 5pt; text-align: center; width: 35pt;">TT</th>
+                <th style="border: 1px solid #000; padding: 5pt; text-align: left;">Họ và tên / Nội dung</th>
+                <th style="border: 1px solid #000; padding: 5pt; text-align: left;">Chi hội</th>
+                <th style="border: 1px solid #000; padding: 5pt; text-align: left;">Chức vụ / Nội dung</th>
+                <th style="border: 1px solid #000; padding: 5pt; text-align: center;">Kết quả biểu quyết</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${validVoteRows
+                .map((row, idx) => {
+                  const pct = row.totalVotes > 0 ? ((row.votesFor / row.totalVotes) * 100).toFixed(1) : '100';
+                  return `
+                    <tr>
+                      <td style="border: 1px solid #000; padding: 5pt; text-align: center;">${idx + 1}</td>
+                      <td style="border: 1px solid #000; padding: 5pt;">${row.fullName}</td>
+                      <td style="border: 1px solid #000; padding: 5pt;">${row.branch}</td>
+                      <td style="border: 1px solid #000; padding: 5pt;">${row.roleOrContent}</td>
+                      <td style="border: 1px solid #000; padding: 5pt; text-align: center;">${row.votesFor}/${row.totalVotes} (${pct}%)</td>
+                    </tr>
+                  `;
+                })
+                .join('')}
+            </tbody>
+          </table>
+        `
+        : '';
+
+    const wordHtml = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <meta charset="utf-8" />
+        <title>Bien ban ${docNumber}</title>
+        <style>
+          @page WordSection1 {
+            size: 210mm 297mm;
+            margin: 20mm 20mm 20mm 30mm;
+          }
+          div.WordSection1 {
+            page: WordSection1;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 13pt;
+            line-height: 1.25;
+            color: #000000;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="WordSection1">
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 12pt;">
+            <tr>
+              <td style="width: 52%; text-align: center; vertical-align: top;">
+                <div style="font-weight: bold; font-size: 12pt; text-transform: uppercase;">HỘI SINH VIÊN TRƯỜNG ĐẠI HỌC AN GIANG</div>
+                <div style="font-weight: bold; font-size: 12pt; text-transform: uppercase;">BCN CLB ĐỌC VÀ GIỚI THIỆU SÁCH</div>
+                <div style="font-weight: bold;">***</div>
+                <div style="margin-top: 4pt; font-size: 13pt;">Số: ${docNumber}</div>
+              </td>
+              <td style="width: 48%; text-align: right; vertical-align: bottom; font-style: italic; font-size: 13pt;">
+                An Giang, ngày ${docDay} tháng ${docMonth} năm ${docYear}
+              </td>
+            </tr>
+          </table>
+
+          <div style="text-align: center; margin: 12pt 0;">
+            <div style="font-weight: bold; font-size: 14pt; text-transform: uppercase;">BIÊN BẢN</div>
+            <div style="font-weight: bold; font-size: 13.5pt;">${meetingTitle}</div>
+            <div>--------------------------------------------</div>
+          </div>
+
+          <p style="margin: 4pt 0; text-align: justify;"><b>1. Thời gian:</b> Vào lúc ${startHour} giờ ${startMinute} phút, ngày ${docDay} tháng ${docMonth} năm ${docYear}.</p>
+          <p style="margin: 4pt 0; text-align: justify;"><b>2. Địa điểm:</b> ${location}.</p>
+          <p style="margin: 4pt 0;"><b>3. Thành phần tham dự:</b></p>
+          <p style="margin: 2pt 0 2pt 18pt;">- Chủ tọa: ${chairName} - ${chairRole}.</p>
+          <p style="margin: 2pt 0 2pt 18pt;">- Thư ký: ${secretaryName || '........................................'} - Thư ký cuộc họp.</p>
+          ${guests.trim() ? `<p style="margin: 2pt 0 2pt 18pt;">- Khách mời / Đại biểu: ${guests}.</p>` : ''}
+          <p style="margin: 2pt 0 6pt 18pt; text-align: justify;">- Tổng số hội viên/thành viên triệu tập: ${totalSummoned} hội viên. Có mặt: ${totalPresent} hội viên (đạt tỷ lệ ${attendancePercent}%). Vắng: ${absentReasonNote}.</p>
+
+          <p style="margin: 8pt 0 4pt 0;"><b>II. NỘI DUNG CUỘC HỌP:</b></p>
+          <p style="margin: 4pt 0 2pt 0;"><b>1. Tuyên bố lý do, giới thiệu đại biểu và thông qua chương trình cuộc họp:</b></p>
+          <p style="margin: 2pt 0 6pt 18pt; text-align: justify;">${openingReason}</p>
+
+          ${discussionsHtml}
+          ${votingHtml}
+
+          <p style="margin: 8pt 0 4pt 0;"><b>III. KẾT LUẬN CUỘC HỌP / THỐNG NHẤT CHUNG:</b></p>
+          <p style="margin: 2pt 0 4pt 0; text-align: justify;">Hội nghị thống nhất ${consensusPercent}% với các nội dung đã thảo luận và quyết nghị như trên. Giao các đồng chí có liên quan hoàn chỉnh hồ sơ, thủ tục trình Ban Thư ký Hội Sinh viên Trường Đại học An Giang xem xét quyết định.</p>
+          <p style="margin: 2pt 0 14pt 0;">Cuộc họp kết thúc vào lúc ${endHour} giờ ${endMinute} phút cùng ngày./.</p>
+
+          <table style="width: 100%; border-collapse: collapse; margin-top: 16pt;">
+            <tr>
+              <td style="width: 50%; text-align: center; vertical-align: top;">
+                <div style="font-weight: bold; text-transform: uppercase;">THƯ KÝ</div>
+                <div style="height: 65pt;"></div>
+                <div style="font-weight: bold;">${secretaryName || ''}</div>
+              </td>
+              <td style="width: 50%; text-align: center; vertical-align: top;">
+                <div style="font-weight: bold; text-transform: uppercase;">CHỦ TỌA</div>
+                <div style="height: 65pt;"></div>
+                <div style="font-weight: bold;">${chairName}</div>
+              </td>
+            </tr>
+          </table>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(['\ufeff', wordHtml], { type: 'application/msword;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Bien_Ban_${docNumber.replace(/[^a-zA-Z0-9-_]/g, '_')}.doc`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
-  const handleArchiveMinutesToClub = () => {
+  // In ra PDF A4 chuẩn lề Trái 30mm, Trên 20mm, Phải 20mm, Dưới 20mm qua cửa sổ in sạch sẽ
+  const handlePrintCleanA4 = () => {
+    const printArea = document.getElementById('printable-minutes-a4');
+    if (!printArea) return;
+    const printWin = window.open('', '_blank', 'width=900,height=1100');
+    if (!printWin) {
+      window.print();
+      return;
+    }
+
+    printWin.document.open();
+    printWin.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Biên bản ${docNumber}</title>
+        <style>
+          @page {
+            size: A4 portrait;
+            margin: 20mm 20mm 20mm 30mm;
+          }
+          body {
+            font-family: "Times New Roman", Times, serif;
+            font-size: 13pt;
+            line-height: 1.28;
+            color: #000000;
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+          }
+          .vote-table th, .vote-table td {
+            border: 1px solid #000000;
+            padding: 5pt 6pt;
+            font-size: 12pt;
+          }
+          p {
+            margin: 3.5pt 0;
+          }
+        </style>
+      </head>
+      <body>
+        ${printArea.innerHTML}
+        <script>
+          window.onload = function() {
+            window.focus();
+            window.print();
+            window.close();
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    printWin.document.close();
+  };
+
+  // Lưu bản chụp / scan biên bản đã có chữ ký sống vào Kho Lưu Trữ Văn Kiện CLB
+  const handleArchiveSignedMinutes = () => {
     if (!onSaveMinutesToArchive) return;
-    const summaryText = `Số biên bản: ${docNumber} (${academicYear}) • Thời gian: ${startHour}g${startMinute}, ngày ${docDay}/${docMonth}/${docYear} • Địa điểm: ${location} • Chủ tọa: ${chairName} (${chairRole}) • Thư ký: ${secretaryName || 'Thư ký CLB'} • Sĩ số: ${totalPresent}/${totalSummoned} (${attendancePercent}%). Kết luận thống nhất ${consensusPercent}%.`;
+    if (!signedMinutesScanImage) {
+      alert('Vui lòng chụp hoặc tải lên ảnh/file bản Biên bản đã ký sống trước khi lưu vào Kho Văn Kiện!');
+      return;
+    }
+
+    const summaryText = `Số biên bản: ${docNumber} • Ngày ${docDay}/${docMonth}/${docYear} • Địa điểm: ${location} • Chủ tọa: ${chairName} (${chairRole}) • Thư ký: ${secretaryName || 'Thư ký CLB'} • Sĩ số: ${totalPresent}/${totalSummoned} (${attendancePercent}%). Đã đính kèm bản có chữ ký sống.`;
 
     onSaveMinutesToArchive({
       title: `[Biên Bản ${docNumber}] ${meetingTitle}`,
       documentNumber: docNumber,
-      academicYear,
       issuedDate: `${docDay}/${docMonth}/${docYear}`,
       proposedBy: chairName,
       proposedById: currentUser.id,
       department: 'Nhân sự & Kế hoạch' as DepartmentType,
       assignedDept: 'Nhân sự & Kế hoạch' as DepartmentType,
       description: summaryText,
-      timeline: `${academicYear} · Ngày ${docDay}/${docMonth}/${docYear}`,
+      timeline: `Ngày ${docDay}/${docMonth}/${docYear}`,
       targetAudience: `Số: ${docNumber}`,
       priority: 'high' as const,
       status: 'approved' as const,
       archivedAt: `${docDay}/${docMonth}/${docYear}`,
       createdAt: `${docDay}/${docMonth}/${docYear}`,
       budgetEstimate: 0,
-      actionItems: validDiscussions.map((d) => `${d.speaker}: ${d.content}`)
+      actionItems: validDiscussions.map((d) => `${d.speaker}: ${d.content}`),
+      attachmentUrl: signedMinutesScanImage,
+      attachmentName: signedMinutesFileName || `Bien_Ban_Da_Ky_${docNumber}.jpg`,
+      attachmentType: signedMinutesScanImage.startsWith('data:application/pdf') ? 'pdf' : 'image'
     });
 
     confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
-    setBannerMsg(`Đã lưu Biên bản số "${docNumber}" (${academicYear}) vào Kho Lưu Trữ Văn Kiện CLB!`);
+    setBannerMsg(`Đã lưu Biên bản có chữ ký sống số "${docNumber}" vào Kho Văn Kiện CLB!`);
+    setSignedMinutesScanImage('');
+    setSignedMinutesFileName('');
     setTimeout(() => setBannerMsg(null), 5000);
   };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* CSS CHUYÊN BIỆT KHI IN PDF: Ẩn toàn bộ giao diện web, chỉ in trọn vẹn tờ A4 */}
-      <style>{`
-        @media print {
-          @page {
-            size: A4 portrait;
-            margin: 18mm 18mm 18mm 22mm;
-          }
-          body * {
-            visibility: hidden !important;
-          }
-          #printable-minutes-a4,
-          #printable-minutes-a4 * {
-            visibility: visible !important;
-          }
-          #printable-minutes-a4 {
-            position: fixed !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: #ffffff !important;
-            color: #000000 !important;
-            box-shadow: none !important;
-            border: none !important;
-            overflow: visible !important;
-          }
-        }
-      `}</style>
-
       {/* Header Banner */}
       <div className="rounded-3xl p-6 sm:p-7 border-3 border-[#382215] bg-[#FAF3E3] shadow-[6px_6px_0px_#382215] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="space-y-1.5 max-w-2xl">
@@ -391,22 +580,11 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
             Khảo Sát Ý Kiến, Biểu Quyết & Biên Bản Cuộc Họp
           </h2>
           <p className="text-xs sm:text-sm text-[#4A3525] leading-relaxed">
-            Tạo phiếu khảo sát đóng góp ý kiến (<strong>ẩn danh hoặc công khai danh tính</strong>) và lập <strong>Biên bản cuộc họp chuẩn khổ A4</strong>.
+            Soạn thảo biên bản chuẩn thể thức A4 (<strong>lề Trái 30mm · Trên/Phải/Dưới 20mm</strong>), tải file Word/PDF để ký sống và lưu bản đã ký vào Kho Văn Kiện.
           </p>
         </div>
 
         <div className="flex items-center gap-2 bg-[#F2E5C9] p-1.5 rounded-2xl border-2 border-[#382215] shadow-[3px_3px_0px_#382215] shrink-0">
-          <button
-            type="button"
-            onClick={() => setSubTab('surveys')}
-            className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition ${
-              subTab === 'surveys' ? 'bg-[#C8532B] text-white' : 'text-[#382215] hover:bg-white/60'
-            }`}
-          >
-            <Vote className="w-4 h-4" />
-            <span>Khảo Sát & Biểu Quyết ({surveys.length})</span>
-          </button>
-
           <button
             type="button"
             onClick={() => setSubTab('minutes')}
@@ -416,6 +594,17 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
           >
             <FileText className="w-4 h-4" />
             <span>Tạo Biên Bản Cuộc Họp</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSubTab('surveys')}
+            className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition ${
+              subTab === 'surveys' ? 'bg-[#C8532B] text-white' : 'text-[#382215] hover:bg-white/60'
+            }`}
+          >
+            <Vote className="w-4 h-4" />
+            <span>Khảo Sát & Biểu Quyết ({surveys.length})</span>
           </button>
         </div>
       </div>
@@ -646,7 +835,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
       )}
 
       {/* =========================================================================
-          TAB B: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN A4 ĐOÀN - HỘI
+          TAB B: TRÌNH TẠO BIÊN BẢN CUỘC HỌP CHUẨN A4 & TẢI LÊN BẢN KÝ SỐNG
          ========================================================================= */}
       {subTab === 'minutes' && (
         <div className="space-y-6">
@@ -671,45 +860,32 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                   <span>Xem Văn Bản A4 & In PDF</span>
                 </button>
 
-                {isBcnLeader && onSaveMinutesToArchive && (
-                  <button
-                    type="button"
-                    onClick={handleArchiveMinutesToClub}
-                    className="px-4 py-2 rounded-xl bg-[#C8532B] text-white font-black text-xs flex items-center gap-1.5 border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
-                  >
-                    <FolderArchive className="w-4 h-4 text-[#FFE29A]" />
-                    <span>Lưu Vào Kho Văn Kiện CLB</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleDownloadWordDoc}
+                  className="px-4 py-2 rounded-xl bg-[#FFFDF8] hover:bg-[#F2E5C9] text-[#382215] font-black text-xs flex items-center gap-1.5 border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-[#245351]" />
+                  <span>Tải File Word (.doc)</span>
+                </button>
               </div>
             </div>
 
-            {/* 1. Số hiệu, Năm học & Thời gian ban hành */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+            {/* 1. Số hiệu & Ngày lập biên bản */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div>
                 <label className="block font-black text-[#382215] mb-1">Số biên bản *</label>
                 <input
                   type="text"
                   value={docNumber}
                   onChange={(e) => setDocNumber(e.target.value)}
-                  placeholder="VD: 05/BB-CLB"
+                  placeholder="VD: 01/BB-CLB"
                   className="w-full px-3 py-2 rounded-xl border-2 border-[#382215]/30 bg-white font-mono font-bold"
                 />
               </div>
 
-              <div>
-                <label className="block font-black text-[#382215] mb-1">Năm học phát hành *</label>
-                <input
-                  type="text"
-                  value={academicYear}
-                  onChange={(e) => setAcademicYear(e.target.value)}
-                  placeholder="VD: Năm học 2026 - 2027"
-                  className="w-full px-3 py-2 rounded-xl border-2 border-[#382215]/30 bg-white font-bold"
-                />
-              </div>
-
               <div className="sm:col-span-2">
-                <label className="block font-black text-[#382215] mb-1">Ngày / Tháng / Năm lập biên bản *</label>
+                <label className="block font-black text-[#382215] mb-1">Ngày / Tháng / Năm lập biên bản (Ngang hàng với Số biên bản) *</label>
                 <div className="grid grid-cols-3 gap-2">
                   <input
                     type="text"
@@ -793,12 +969,13 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-bold mb-1">Chức vụ Chủ tọa *</label>
+                  <label className="block font-bold mb-1">Chức vụ cao nhất của Chủ tọa *</label>
                   <input
                     type="text"
                     value={chairRole}
                     onChange={(e) => setChairRole(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border bg-white"
+                    placeholder="VD: Chủ nhiệm CLB"
+                    className="w-full px-3 py-2 rounded-xl border bg-white font-bold"
                   />
                 </div>
                 <div>
@@ -814,11 +991,12 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold mb-1">Khách mời / Đại biểu (nếu có)</label>
+                <label className="block font-bold mb-1">Khách mời / Đại biểu (Bỏ trống nếu không có)</label>
                 <input
                   type="text"
                   value={guests}
                   onChange={(e) => setGuests(e.target.value)}
+                  placeholder="VD: Đồng chí Nguyễn Văn A - Đại diện Ban Thư ký HSV Trường..."
                   className="w-full px-3 py-2 rounded-xl border bg-white"
                 />
               </div>
@@ -867,7 +1045,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 />
               </div>
 
-              {/* MỤC 2: Ý KIẾN THẢO LUẬN (CÓ NÚT XÓA / ẨN MỤC NẾU CUỘC HỌP KHÔNG CÓ) */}
               <div className="p-3.5 rounded-xl bg-[#FAF3E3] border border-[#382215]/20 space-y-2.5">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <label className="flex items-center gap-2 font-black text-[#382215] cursor-pointer">
@@ -877,7 +1054,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                       onChange={(e) => setIncludeDiscussions(e.target.checked)}
                       className="rounded text-[#245351]"
                     />
-                    <span>2. Các ý kiến trao đổi, thảo luận tại cuộc họp (Bỏ tick nếu không có mục này)</span>
+                    <span>2. Các ý kiến trao đổi, thảo luận tại cuộc họp (Bỏ tick để ẩn mục này)</span>
                   </label>
 
                   {includeDiscussions && (
@@ -926,7 +1103,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                           type="button"
                           onClick={() => setDiscussions((prev) => prev.filter((item) => item.id !== d.id))}
                           className="sm:col-span-1 p-2 text-rose-600 cursor-pointer"
-                          title="Xóa ý kiến này"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -936,7 +1112,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 )}
               </div>
 
-              {/* MỤC 3: BIỂU QUYẾT / QUYẾT NGHỊ (CÓ NÚT XÓA / ẨN MỤC NẾU CUỘC HỌP KHÔNG CÓ) */}
               <div className="p-3.5 rounded-xl bg-[#FAF3E3] border border-[#382215]/20 space-y-2.5">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <label className="flex items-center gap-2 font-black text-[#382215] cursor-pointer">
@@ -946,7 +1121,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                       onChange={(e) => setIncludeVoting(e.target.checked)}
                       className="rounded text-[#C8532B]"
                     />
-                    <span>3. Biểu quyết / Quyết nghị của hội nghị (Bỏ tick nếu không có mục này)</span>
+                    <span>3. Biểu quyết / Quyết nghị của hội nghị (Bỏ tick để ẩn mục này)</span>
                   </label>
 
                   {includeVoting && (
@@ -1036,7 +1211,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                           type="button"
                           onClick={() => setVoteRows((prev) => prev.filter((r) => r.id !== row.id))}
                           className="sm:col-span-1 text-rose-600 flex justify-center cursor-pointer"
-                          title="Xóa dòng này"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1079,6 +1253,55 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* 6. BƯỚC HOÀN TẤT: TẢI LÊN BẢN BIÊN BẢN ĐÃ CÓ CHỮ KÝ SỐNG ĐỂ LƯU VÀO KHO VĂN KIỆN */}
+            {isBcnLeader && onSaveMinutesToArchive && (
+              <div className="p-4 rounded-2xl bg-[#EAF2EF] border-2 border-[#245351] space-y-3 text-xs">
+                <div className="font-black text-[#1E3A24] flex items-center gap-1.5">
+                  <Camera className="w-4 h-4 text-[#C8532B]" />
+                  <span>Bước Lưu Trữ Chính Thức: Tải Lên Ảnh / Scan Biên Bản Đã Có Chữ Ký Sống</span>
+                </div>
+                <p className="text-[11px] text-[#382215]">
+                  Sau khi in bản Word/PDF ở trên để Thư ký và Chủ tọa <strong>ký tên trực tiếp bằng bút mực</strong>, hãy chụp ảnh hoặc scan bản đã ký tải ngược lên đây để lưu vào Kho Văn Kiện CLB.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="px-4 py-2 rounded-xl bg-white border-2 border-[#245351] text-[#245351] font-black flex items-center gap-1.5 cursor-pointer">
+                    <Camera className="w-4 h-4" />
+                    <span>{signedMinutesFileName || 'Chọn ảnh / file PDF Biên bản đã ký sống'}</span>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf,.pdf"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setSignedMinutesFileName(file.name);
+                        if (file.type === 'application/pdf') {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            if (typeof reader.result === 'string') setSignedMinutesScanImage(reader.result);
+                          };
+                          reader.readAsDataURL(file);
+                        } else {
+                          const b64 = await readFileAsDataUrl(file, 1400, 0.85);
+                          setSignedMinutesScanImage(b64);
+                        }
+                      }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleArchiveSignedMinutes}
+                    className="px-5 py-2 rounded-xl bg-[#C8532B] hover:bg-[#A63E1B] text-white font-black flex items-center gap-1.5 border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
+                  >
+                    <FolderArchive className="w-4 h-4 text-[#FFE29A]" />
+                    <span>Lưu Bản Có Chữ Ký Sống Vào Kho CLB</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1216,20 +1439,28 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
         </div>
       )}
 
-      {/* MODAL XEM TRƯỚC & IN PDF BIÊN BẢN CUỘC HỌP CHUẨN A4 (KHÔNG QUỐC HIỆU, KHÔNG CHỮ THỪA) */}
+      {/* MODAL XEM TRƯỚC & IN PDF BIÊN BẢN CUỘC HỌP CHUẨN A4 */}
       {isPreviewMinutesOpen && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-xs">
           <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[94vh] overflow-hidden flex flex-col shadow-2xl">
-            <div className="bg-[#382215] text-white px-5 py-3.5 flex items-center justify-between print:hidden">
-              <span className="font-bold text-sm">Khổ A4 • Times New Roman (Chuẩn Văn Bản Hội Sinh Viên)</span>
+            <div className="bg-[#382215] text-white px-5 py-3.5 flex items-center justify-between">
+              <span className="font-bold text-sm">Khổ A4 • Lề Trái 30mm, Trên/Phải/Dưới 20mm (Chưa ký sống)</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handlePrintMinutes}
+                  onClick={handleDownloadWordDoc}
+                  className="px-3.5 py-1.5 rounded-xl bg-white text-[#382215] font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Tải Word (.doc)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintCleanA4}
                   className="px-4 py-1.5 rounded-xl bg-amber-400 text-stone-950 font-black text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>In / Xuất File PDF A4</span>
+                  <span>In / Lưu PDF A4</span>
                 </button>
                 <button type="button" onClick={() => setIsPreviewMinutesOpen(false)} className="cursor-pointer">
                   <X className="w-5 h-5" />
@@ -1238,133 +1469,163 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
             </div>
 
             {/* VÙNG IN A4 SẠCH SẼ */}
-            <div
-              id="printable-minutes-a4"
-              className="p-8 sm:p-12 overflow-y-auto text-black leading-relaxed bg-white"
-              style={{ fontFamily: '"Times New Roman", Times, serif', fontSize: '13.5pt' }}
-            >
-              {/* Tiêu đề hành chính Hội Sinh Viên (KHÔNG dùng Quốc hiệu) */}
-              <div className="flex items-start justify-between gap-4 mb-5">
-                <div className="text-center">
-                  <div className="font-bold uppercase text-[12pt]">HỘI SINH VIÊN TRƯỜNG ĐẠI HỌC AN GIANG</div>
-                  <div className="font-bold uppercase text-[12pt]">BCN CLB ĐỌC VÀ GIỚI THIỆU SÁCH</div>
-                  <div className="font-bold leading-none mt-1">***</div>
-                  <div className="mt-1.5 text-[13pt]">Số: {docNumber}</div>
-                  <div className="italic text-[12pt]">({academicYear})</div>
+            <div className="overflow-y-auto bg-stone-200 p-4 sm:p-6 flex justify-center">
+              <div
+                id="printable-minutes-a4"
+                className="bg-white text-black shadow-lg"
+                style={{
+                  width: '210mm',
+                  minHeight: '297mm',
+                  padding: '20mm 20mm 20mm 30mm',
+                  fontFamily: '"Times New Roman", Times, serif',
+                  fontSize: '13pt',
+                  lineHeight: 1.28
+                }}
+              >
+                {/* Tiêu đề hành chính Hội Sinh Viên: Dòng An Giang ngày... ngang hàng với dòng Số: .../BB-CLB */}
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '12pt' }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ width: '54%', textAlign: 'center', verticalAlign: 'top' }}>
+                        <div style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '12pt' }}>
+                          HỘI SINH VIÊN TRƯỜNG ĐẠI HỌC AN GIANG
+                        </div>
+                        <div style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '12pt' }}>
+                          BCN CLB ĐỌC VÀ GIỚI THIỆU SÁCH
+                        </div>
+                        <div style={{ fontWeight: 'bold', lineHeight: 1 }}>***</div>
+                        <div style={{ marginTop: '4pt', fontSize: '13pt' }}>Số: {docNumber}</div>
+                      </td>
+                      <td
+                        style={{
+                          width: '46%',
+                          textAlign: 'right',
+                          verticalAlign: 'bottom',
+                          fontStyle: 'italic',
+                          fontSize: '13pt'
+                        }}
+                      >
+                        An Giang, ngày {docDay} tháng {docMonth} năm {docYear}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div style={{ textAlign: 'center', margin: '12pt 0' }}>
+                  <div style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14pt' }}>BIÊN BẢN</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '13.5pt', marginTop: '2pt' }}>{meetingTitle}</div>
+                  <div>--------------------------------------------</div>
                 </div>
 
-                <div className="text-right italic text-[13pt] pt-1">
-                  An Giang, ngày {docDay} tháng {docMonth} năm {docYear}
-                </div>
-              </div>
-
-              <div className="text-center my-5">
-                <div className="font-bold uppercase text-[15pt]">BIÊN BẢN</div>
-                <div className="font-bold text-[14pt] mt-0.5">{meetingTitle}</div>
-                <div className="mt-1">--------------------------------------------</div>
-              </div>
-
-              <div className="space-y-2 text-justify">
-                <p>
-                  <strong>1. Thời gian:</strong> Vào lúc {startHour} giờ {startMinute} phút, ngày {docDay} tháng {docMonth} năm {docYear}.
-                </p>
-                <p>
-                  <strong>2. Địa điểm:</strong> {location}.
-                </p>
-                <p>
-                  <strong>3. Thành phần tham dự:</strong>
-                </p>
-                <ul className="list-none pl-4 space-y-1">
-                  <li>- Chủ tọa: {chairName} - {chairRole}.</li>
-                  <li>- Thư ký: {secretaryName || '........................................'} - Thư ký cuộc họp.</li>
-                  {guests.trim() && <li>- Khách mời / Đại biểu: {guests}.</li>}
-                  <li>
-                    - Tổng số hội viên/thành viên triệu tập: {totalSummoned} hội viên. Có mặt: {totalPresent} hội viên (đạt tỷ lệ {attendancePercent}%). Vắng: {absentReasonNote}.
-                  </li>
-                </ul>
-
-                <p className="font-bold pt-2">II. NỘI DUNG CUỘC HỌP:</p>
-                <p>
-                  <strong>1. Tuyên bố lý do, giới thiệu đại biểu và thông qua chương trình cuộc họp:</strong>
-                </p>
-                <p className="pl-4">{openingReason}</p>
-
-                {/* Chỉ hiển thị Mục 2 khi có dữ liệu và được bật */}
-                {validDiscussions.length > 0 && (
-                  <>
-                    <p>
-                      <strong>2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</strong>
+                <div style={{ textAlign: 'justify' }}>
+                  <p style={{ margin: '3.5pt 0' }}>
+                    <strong>1. Thời gian:</strong> Vào lúc {startHour} giờ {startMinute} phút, ngày {docDay} tháng {docMonth} năm {docYear}.
+                  </p>
+                  <p style={{ margin: '3.5pt 0' }}>
+                    <strong>2. Địa điểm:</strong> {location}.
+                  </p>
+                  <p style={{ margin: '3.5pt 0' }}>
+                    <strong>3. Thành phần tham dự:</strong>
+                  </p>
+                  <p style={{ margin: '2pt 0 2pt 18pt' }}>
+                    - Chủ tọa: {chairName} - {chairRole}.
+                  </p>
+                  <p style={{ margin: '2pt 0 2pt 18pt' }}>
+                    - Thư ký: {secretaryName || '........................................'} - Thư ký cuộc họp.
+                  </p>
+                  {guests.trim() && (
+                    <p style={{ margin: '2pt 0 2pt 18pt' }}>
+                      - Khách mời / Đại biểu: {guests}.
                     </p>
-                    <div className="pl-4 space-y-1">
+                  )}
+                  <p style={{ margin: '2pt 0 6pt 18pt' }}>
+                    - Tổng số hội viên/thành viên triệu tập: {totalSummoned} hội viên. Có mặt: {totalPresent} hội viên (đạt tỷ lệ {attendancePercent}%). Vắng: {absentReasonNote}.
+                  </p>
+
+                  <p style={{ margin: '8pt 0 3pt 0', fontWeight: 'bold' }}>II. NỘI DUNG CUỘC HỌP:</p>
+                  <p style={{ margin: '3pt 0 2pt 0' }}>
+                    <strong>1. Tuyên bố lý do, giới thiệu đại biểu và thông qua chương trình cuộc họp:</strong>
+                  </p>
+                  <p style={{ margin: '2pt 0 6pt 18pt' }}>{openingReason}</p>
+
+                  {validDiscussions.length > 0 && (
+                    <>
+                      <p style={{ margin: '6pt 0 2pt 0' }}>
+                        <strong>2. Các ý kiến trao đổi, thảo luận tại cuộc họp:</strong>
+                      </p>
                       {validDiscussions.map((d) => (
-                        <p key={d.id}>
+                        <p key={d.id} style={{ margin: '2pt 0 2pt 18pt' }}>
                           - Ý kiến của {d.speaker}: {d.content}
                         </p>
                       ))}
-                    </div>
-                  </>
-                )}
+                    </>
+                  )}
 
-                {/* Chỉ hiển thị Mục 3 khi có dữ liệu và được bật */}
-                {validVoteRows.length > 0 && (
-                  <>
-                    <p>
-                      <strong>{validDiscussions.length > 0 ? '3.' : '2.'} Biểu quyết / Quyết nghị của hội nghị:</strong>
-                    </p>
-                    <p className="pl-4">
-                      Hội nghị tiến hành biểu quyết đối với các nội dung/danh sách dự kiến. Kết quả cụ thể như sau:
-                    </p>
+                  {validVoteRows.length > 0 && (
+                    <>
+                      <p style={{ margin: '6pt 0 2pt 0' }}>
+                        <strong>{validDiscussions.length > 0 ? '3.' : '2.'} Biểu quyết / Quyết nghị của hội nghị:</strong>
+                      </p>
+                      <p style={{ margin: '2pt 0 6pt 18pt' }}>
+                        Hội nghị tiến hành biểu quyết đối với các nội dung/danh sách dự kiến. Kết quả cụ thể như sau:
+                      </p>
 
-                    <table className="w-full border-collapse border border-black text-[12pt] my-3">
-                      <thead>
-                        <tr>
-                          <th className="border border-black px-2 py-1.5 text-center w-12">TT</th>
-                          <th className="border border-black px-2 py-1.5 text-left">Họ và tên / Nội dung</th>
-                          <th className="border border-black px-2 py-1.5 text-left">Chi hội</th>
-                          <th className="border border-black px-2 py-1.5 text-left">Chức vụ / Nội dung</th>
-                          <th className="border border-black px-2 py-1.5 text-center">Kết quả biểu quyết</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {validVoteRows.map((row, idx) => {
-                          const pct = row.totalVotes > 0 ? ((row.votesFor / row.totalVotes) * 100).toFixed(1) : '100';
-                          return (
-                            <tr key={row.id}>
-                              <td className="border border-black px-2 py-1.5 text-center">{idx + 1}</td>
-                              <td className="border border-black px-2 py-1.5">{row.fullName}</td>
-                              <td className="border border-black px-2 py-1.5">{row.branch}</td>
-                              <td className="border border-black px-2 py-1.5">{row.roleOrContent}</td>
-                              <td className="border border-black px-2 py-1.5 text-center">
-                                {row.votesFor}/{row.totalVotes} ({pct}%)
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </>
-                )}
+                      <table className="vote-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12pt', marginBottom: '8pt' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: '1px solid #000', padding: '5pt', textAlign: 'center', width: '35pt' }}>TT</th>
+                            <th style={{ border: '1px solid #000', padding: '5pt', textAlign: 'left' }}>Họ và tên / Nội dung</th>
+                            <th style={{ border: '1px solid #000', padding: '5pt', textAlign: 'left' }}>Chi hội</th>
+                            <th style={{ border: '1px solid #000', padding: '5pt', textAlign: 'left' }}>Chức vụ / Nội dung</th>
+                            <th style={{ border: '1px solid #000', padding: '5pt', textAlign: 'center' }}>Kết quả biểu quyết</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {validVoteRows.map((row, idx) => {
+                            const pct = row.totalVotes > 0 ? ((row.votesFor / row.totalVotes) * 100).toFixed(1) : '100';
+                            return (
+                              <tr key={row.id}>
+                                <td style={{ border: '1px solid #000', padding: '5pt', textAlign: 'center' }}>{idx + 1}</td>
+                                <td style={{ border: '1px solid #000', padding: '5pt' }}>{row.fullName}</td>
+                                <td style={{ border: '1px solid #000', padding: '5pt' }}>{row.branch}</td>
+                                <td style={{ border: '1px solid #000', padding: '5pt' }}>{row.roleOrContent}</td>
+                                <td style={{ border: '1px solid #000', padding: '5pt', textAlign: 'center' }}>
+                                  {row.votesFor}/{row.totalVotes} ({pct}%)
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
 
-                <p className="font-bold pt-2">III. KẾT LUẬN CUỘC HỌP / THỐNG NHẤT CHUNG:</p>
-                <p>
-                  Hội nghị thống nhất {consensusPercent}% với các nội dung đã thảo luận và quyết nghị như trên. Giao các đồng chí có liên quan hoàn chỉnh hồ sơ, thủ tục trình Ban Thư ký Hội Sinh viên Trường Đại học An Giang xem xét quyết định.
-                </p>
-                <p>
-                  Cuộc họp kết thúc vào lúc {endHour} giờ {endMinute} phút cùng ngày./.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 text-center mt-8 pt-2">
-                <div>
-                  <div className="font-bold uppercase">THƯ KÝ</div>
-                  <div className="italic text-[12pt]">(Đã ký)</div>
-                  <div className="font-bold mt-16">{secretaryName || ''}</div>
+                  <p style={{ margin: '8pt 0 3pt 0', fontWeight: 'bold' }}>III. KẾT LUẬN CUỘC HỌP / THỐNG NHẤT CHUNG:</p>
+                  <p style={{ margin: '2pt 0 4pt 0' }}>
+                    Hội nghị thống nhất {consensusPercent}% với các nội dung đã thảo luận và quyết nghị như trên. Giao các đồng chí có liên quan hoàn chỉnh hồ sơ, thủ tục trình Ban Thư ký Hội Sinh viên Trường Đại học An Giang xem xét quyết định.
+                  </p>
+                  <p style={{ margin: '2pt 0 12pt 0' }}>
+                    Cuộc họp kết thúc vào lúc {endHour} giờ {endMinute} phút cùng ngày./.
+                  </p>
                 </div>
-                <div>
-                  <div className="font-bold uppercase">CHỦ TỌA</div>
-                  <div className="italic text-[12pt]">(Đã ký)</div>
-                  <div className="font-bold mt-16">{chairName}</div>
-                </div>
+
+                {/* Chữ ký để trống hoàn toàn chữ "(Đã ký)" để in ra ký sống */}
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '14pt' }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ width: '50%', textAlign: 'center', verticalAlign: 'top' }}>
+                        <div style={{ fontWeight: 'bold', textTransform: 'uppercase' }}>THƯ KÝ</div>
+                        <div style={{ height: '65pt' }} />
+                        <div style={{ fontWeight: 'bold' }}>{secretaryName || ''}</div>
+                      </td>
+                      <td style={{ width: '50%', textAlign: 'center', verticalAlign: 'top' }}>
+                        <div style={{ fontWeight: 'bold', textTransform: 'uppercase' }}>CHỦ TỌA</div>
+                        <div style={{ height: '65pt' }} />
+                        <div style={{ fontWeight: 'bold' }}>{chairName}</div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
