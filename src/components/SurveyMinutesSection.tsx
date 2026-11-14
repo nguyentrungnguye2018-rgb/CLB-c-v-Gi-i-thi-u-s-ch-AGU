@@ -18,7 +18,6 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserProfile, DepartmentType } from '../types';
-import { readFileAsDataUrl } from '../utils/imageUpload';
 import {
   isMasterRootUser,
   isClubPresidentUser,
@@ -82,7 +81,7 @@ interface VoteTableRow {
 // Chỉ lấy chức vụ cao nhất, loại bỏ phần kiêm nhiệm phía sau
 const getHighestPositionOnly = (rawPos?: string): string => {
   if (!rawPos) return 'Chủ nhiệm CLB';
-  const cleaned = rawPos.split(/[•·|-(]/)[0].trim();
+  const cleaned = rawPos.split(/[•·|(\-]/)[0].trim();
   return cleaned || 'Chủ nhiệm CLB';
 };
 
@@ -276,7 +275,6 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
   const [startMinute, setStartMinute] = useState('30');
   const [location, setLocation] = useState('Phòng họp tầng 3 — Thư viện Trường Đại học An Giang');
   const [chairName, setChairName] = useState(currentUser.name);
-  // Chỉ lấy chức vụ cao nhất, không kèm chức danh kiêm nhiệm
   const [chairRole, setChairRole] = useState(getHighestPositionOnly(currentUser.position));
   const [secretaryName, setSecretaryName] = useState('');
   const [guests, setGuests] = useState('');
@@ -328,7 +326,7 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
     ? voteRows.filter((r) => r.fullName.trim() || r.roleOrContent.trim())
     : [];
 
-  // Xuất file Word (.doc) chuẩn khổ A4 lề Trái 30mm, Trên 20mm, Phải 20mm, Dưới 20mm, không có chữ "(Đã ký)" chết
+  // Xuất file Word (.doc) chuẩn khổ A4 lề Trái 30mm, Trên 20mm, Phải 20mm, Dưới 20mm
   const handleDownloadWordDoc = () => {
     const discussionsHtml =
       validDiscussions.length > 0
@@ -1273,20 +1271,17 @@ export const SurveyMinutesSection: React.FC<SurveyMinutesSectionProps> = ({
                       type="file"
                       accept="image/*,application/pdf,.pdf"
                       className="hidden"
-                      onChange={async (e) => {
+                      onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
                         setSignedMinutesFileName(file.name);
-                        if (file.type === 'application/pdf') {
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            if (typeof reader.result === 'string') setSignedMinutesScanImage(reader.result);
-                          };
-                          reader.readAsDataURL(file);
-                        } else {
-                          const b64 = await readFileAsDataUrl(file, 1400, 0.85);
-                          setSignedMinutesScanImage(b64);
-                        }
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === 'string') {
+                            setSignedMinutesScanImage(reader.result);
+                          }
+                        };
+                        reader.readAsDataURL(file);
                       }}
                     />
                   </label>
