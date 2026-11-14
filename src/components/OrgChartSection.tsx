@@ -6,11 +6,9 @@ import {
   CheckCircle2, 
   X, 
   Check, 
-  Medal, 
   Trash2, 
   UserCog, 
   ArrowRightLeft, 
-  Send,
   GraduationCap,
   ShieldAlert,
   Clock,
@@ -20,6 +18,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserProfile, DepartmentType, ClubTermRecord } from '../types';
+import { registerUserToCloud, pushCloudSync } from '../services/cloudSync';
 import {
   isMasterRootUser,
   isClubPresidentUser,
@@ -68,13 +67,12 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   onOpenSuccessionModal,
   onDeleteUser
 }) => {
-  const [selectedDeptId, setSelectedDeptId] = useState<DepartmentType | 'all'>('all');
+  const [selectedDeptId] = useState<DepartmentType | 'all'>('all');
   const [searchMember, setSearchMember] = useState('');
 
   const [editingDept, setEditingDept] = useState<DepartmentType | null>(null);
   const [chosenLeaderId, setChosenLeaderId] = useState<string>('');
   const [chosenVice1Id, setChosenVice1Id] = useState<string>('');
-  const [chosenVice2Id, setChosenVice2Id] = useState<string>('');
   const [deptModalError, setDeptModalError] = useState<string | null>(null);
   const [deptActionBanner, setDeptActionBanner] = useState<string | null>(null);
 
@@ -92,6 +90,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   const [userOverrides, setUserOverrides] = useState<Record<string, any>>({});
   const [locallyRemovedUserIds, setLocallyRemovedUserIds] = useState<string[]>([]);
   const [locallyCreatedAlumni, setLocallyCreatedAlumni] = useState<UserProfile[]>([]);
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
 
   // Modal tạo tài khoản Cựu Chủ Nhiệm Danh Dự (Chỉ Tài khoản Chính CLB bcn-root)
   const [isCreateFormerBcnOpen, setIsCreateFormerBcnOpen] = useState(false);
@@ -106,7 +105,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   // Modal tạo tài khoản Giám Sát Hội Sinh Viên Trường (Chỉ Tài khoản Chính CLB bcn-root)
   const [isCreateHsvOpen, setIsCreateHsvOpen] = useState(false);
   const [hsvDisplayName, setHsvDisplayName] = useState('Ban Thư Ký Hội Sinh Viên Trường ĐH An Giang');
-  const [hsvUsername, setHsvUsername] = useState('HSV-AGU-ADMIN');
+  const [hsvUsername, setHsvUsername] = useState('HSVAGU');
   const [hsvPassword, setHsvPassword] = useState('');
 
   const isRoot = isMasterRootUser(currentUser) || currentUser.id === 'bcn-root';
@@ -115,10 +114,15 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   const canModifyOrgChart = isRoot || isPresident || isVicePresident || isBcnMode;
   const canDeleteMembers = canModifyOrgChart;
 
-  // Hợp nhất danh sách nhân sự
-  const effectiveUserList: any[] = [...userList, ...locallyCreatedAlumni]
-    .filter((u) => !locallyRemovedUserIds.includes(u.id))
-    .map((u) => (userOverrides[u.id] !== undefined ? { ...u, ...userOverrides[u.id] } : u));
+  // Hợp nhất danh sách nhân sự (tránh trùng ID khi server trả về)
+  const mergedMap = new Map<string, any>();
+  [...userList, ...locallyCreatedAlumni].forEach((u) => {
+    if (u && u.id && !locallyRemovedUserIds.includes(u.id)) {
+      const patched = userOverrides[u.id] !== undefined ? { ...u, ...userOverrides[u.id] } : u;
+      mergedMap.set(u.id, patched);
+    }
+  });
+  const effectiveUserList: any[] = Array.from(mergedMap.values());
 
   // Danh sách Tài khoản Giám Sát Hội Sinh Viên Trường
   const hsvSupervisorAccounts = effectiveUserList.filter(
@@ -139,18 +143,16 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     (u) => u.id !== 'bcn-root' && u.clubRole === 'alumni_viewer'
   );
 
-  // Danh sách chờ Account Chính duyệt xóa (các lý do không phải tốt nghiệp)
+  // Danh sách chờ Account Chính duyệt xóa
   const pendingDeletionUsers = effectiveUserList.filter(
     (u) => u.id !== 'bcn-root' && u.pendingDeletion && u.pendingDeletion.status === 'pending_root_approval'
   );
 
+  // Đồng bộ ĐÚNG key 'userList' lên Firestore + localStorage để không bao giờ biến mất
   const syncUsersToServer = async (updatedUsers: any[]) => {
     try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'users', data: updatedUsers })
-      });
+      localStorage.setItem('agu_user_list', JSON.stringify(updatedUsers));
+      await pushCloudSync('userList', updatedUsers);
     } catch (err) {
       console.error('Lỗi đồng bộ danh sách nhân sự:', err);
     }
@@ -159,96 +161,116 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
   // Tài khoản Chính (bcn-root) tạo tài khoản Giám Sát Hội Sinh Viên Trường
   const handleCreateHsvSupervisorAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isRoot || !hsvDisplayName.trim() || !hsvUsername.trim() || !hsvPassword.trim()) return;
+    if (!isRoot || !hsvDisplayName.trim() || !hsvUsername.trim() || !hsvPassword.trim() || isCreatingAccount) return;
 
-    const newHsvAccount: UserProfile = {
-      id: `hsv_sup_${Date.now()}`,
-      name: hsvDisplayName.trim(),
-      nickname: 'Hội Sinh Viên Giám Sát 🏛️',
-      studentId: hsvUsername.trim().toUpperCase(),
-      faculty: 'Hội Sinh Viên Trường ĐH An Giang',
-      avatar: HONORARY_EMBLEM_AVATAR,
-      role: 'bcn_admin',
-      adminType: 'hsv_supervisor',
-      clubRole: 'hsv_supervisor',
-      department: 'BQT',
-      departmentStatus: 'approved',
-      position: 'Hội Sinh Viên Trường (Quản Lý & Giám Sát CLB)',
-      departmentRole: 'leader',
-      term: 'Giám Sát Thường Trực',
-      email: `${hsvUsername.trim().toLowerCase()}@agu.edu.vn`,
-      password: hsvPassword.trim(),
-      readingStreak: 0,
-      enewsStreak: 0,
-      hasCheckedInToday: false,
-      s5tProgress: 100,
-      favoriteBook: 'Văn Hóa Đọc Sinh Viên AGU',
-      joinDate: new Date().getFullYear().toString(),
-      meritPoints: 0,
-      badges: ['Hội Sinh Viên Trường ĐH An Giang 🏛️'],
-      canComment: true
-    };
+    setIsCreatingAccount(true);
+    try {
+      const cleanCode = hsvUsername.trim().toUpperCase();
+      const newHsvAccount: UserProfile = {
+        id: `hsv_sup_${Date.now()}`,
+        name: hsvDisplayName.trim(),
+        nickname: 'Hội Sinh Viên Giám Sát 🏛️',
+        studentId: cleanCode,
+        faculty: 'Hội Sinh Viên Trường ĐH An Giang',
+        avatar: HONORARY_EMBLEM_AVATAR,
+        role: 'bcn_admin',
+        adminType: 'hsv_supervisor',
+        clubRole: 'hsv_supervisor',
+        department: 'BQT',
+        departmentStatus: 'approved',
+        position: 'Hội Sinh Viên Trường (Quản Lý & Giám Sát CLB)',
+        departmentRole: 'leader',
+        term: 'Giám Sát Thường Trực',
+        email: `${cleanCode.toLowerCase()}@agu.edu.vn`,
+        password: hsvPassword.trim(),
+        readingStreak: 0,
+        enewsStreak: 0,
+        hasCheckedInToday: false,
+        s5tProgress: 100,
+        favoriteBook: 'Văn Hóa Đọc Sinh Viên AGU',
+        joinDate: new Date().toLocaleDateString('vi-VN'),
+        meritPoints: 0,
+        badges: ['Hội Sinh Viên Trường ĐH An Giang 🏛️'],
+        canComment: true
+      };
 
-    const nextUsers = [...effectiveUserList, newHsvAccount];
-    setLocallyCreatedAlumni((prev) => [...prev, newHsvAccount]);
-    await syncUsersToServer(nextUsers);
+      const nextUsers = [newHsvAccount, ...effectiveUserList.filter((u) => u.studentId !== cleanCode)];
+      setLocallyCreatedAlumni((prev) => [newHsvAccount, ...prev]);
+      localStorage.setItem('agu_user_list', JSON.stringify(nextUsers));
 
-    confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
-    setDeptActionBanner(
-      `Tài khoản Chính CLB đã cấp phát thành công tài khoản Hội Sinh Viên Giám Sát "${newHsvAccount.name}" (Tên đăng nhập: ${newHsvAccount.studentId}) — Có quyền quản lý như Chủ nhiệm nhưng khóa quyền Thu/Chi và Giải quyết mâu thuẫn nội bộ!`
-    );
-    setIsCreateHsvOpen(false);
-    setHsvPassword('');
-    setTimeout(() => setDeptActionBanner(null), 7000);
+      // Lưu trực tiếp vào Firestore qua cả registerUserToCloud lẫn pushCloudSync('userList')
+      await registerUserToCloud(newHsvAccount);
+      await pushCloudSync('userList', nextUsers);
+
+      confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+      setDeptActionBanner(
+        `Đã lưu vĩnh viễn tài khoản Hội Sinh Viên Giám Sát "${newHsvAccount.name}" (Tên đăng nhập: ${newHsvAccount.studentId} | Mật khẩu: ${newHsvAccount.password})!`
+      );
+      setIsCreateHsvOpen(false);
+      setHsvPassword('');
+      setTimeout(() => setDeptActionBanner(null), 8000);
+    } finally {
+      setIsCreatingAccount(false);
+    }
   };
 
   // Tài khoản Chính (bcn-root) tạo tài khoản Cựu Chủ nhiệm Danh dự
   const handleCreateFormerBcnAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isRoot || !formerName.trim() || !formerStudentId.trim()) return;
+    if (!isRoot || !formerName.trim() || !formerStudentId.trim() || isCreatingAccount) return;
 
-    const newFormerBcn: UserProfile = {
-      id: `former_bcn_${Date.now()}`,
-      name: formerName.trim(),
-      studentId: formerStudentId.trim().toUpperCase(),
-      faculty: formerFaculty.trim() || 'Cựu Sinh Viên AGU',
-      avatar: HONORARY_EMBLEM_AVATAR,
-      role: 'member',
-      adminType: 'member',
-      clubRole: 'former_bcn',
-      department: 'BQT',
-      departmentStatus: 'approved',
-      position: `${formerTitleInput.trim()} (${formerTermInput.trim()})`,
-      formerTitle: formerTitleInput.trim(),
-      term: formerTermInput.trim(),
-      email: formerEmail.trim() || `${formerStudentId.trim().toLowerCase()}@agu.edu.vn`,
-      password: formerPassword.trim() || 'AGU2026',
-      readingStreak: 0,
-      enewsStreak: 0,
-      hasCheckedInToday: false,
-      s5tProgress: 100,
-      favoriteBook: 'Cựu Ban Chủ Nhiệm CLB',
-      joinDate: formerTermInput.trim(),
-      meritPoints: 100,
-      badges: ['Cựu Ban Chủ Nhiệm Danh Dự 🏛️'],
-      isGraduated: true,
-      graduatedAt: new Date().toLocaleDateString('vi-VN'),
-      canComment: true
-    };
+    setIsCreatingAccount(true);
+    try {
+      const cleanCode = formerStudentId.trim().toUpperCase();
+      const newFormerBcn: UserProfile = {
+        id: `former_bcn_${Date.now()}`,
+        name: formerName.trim(),
+        studentId: cleanCode,
+        faculty: formerFaculty.trim() || 'Cựu Sinh Viên AGU',
+        avatar: HONORARY_EMBLEM_AVATAR,
+        role: 'member',
+        adminType: 'member',
+        clubRole: 'former_bcn',
+        department: 'BQT',
+        departmentStatus: 'approved',
+        position: `${formerTitleInput.trim()} (${formerTermInput.trim()})`,
+        formerTitle: formerTitleInput.trim(),
+        term: formerTermInput.trim(),
+        email: formerEmail.trim() || `${cleanCode.toLowerCase()}@agu.edu.vn`,
+        password: formerPassword.trim() || 'AGU2026',
+        readingStreak: 0,
+        enewsStreak: 0,
+        hasCheckedInToday: false,
+        s5tProgress: 100,
+        favoriteBook: 'Cựu Ban Chủ Nhiệm CLB',
+        joinDate: formerTermInput.trim(),
+        meritPoints: 100,
+        badges: ['Cựu Ban Chủ Nhiệm Danh Dự 🏛️'],
+        isGraduated: true,
+        graduatedAt: new Date().toLocaleDateString('vi-VN'),
+        canComment: true
+      };
 
-    const nextUsers = [...effectiveUserList, newFormerBcn];
-    setLocallyCreatedAlumni((prev) => [...prev, newFormerBcn]);
-    await syncUsersToServer(nextUsers);
+      const nextUsers = [newFormerBcn, ...effectiveUserList.filter((u) => u.studentId !== cleanCode)];
+      setLocallyCreatedAlumni((prev) => [newFormerBcn, ...prev]);
+      localStorage.setItem('agu_user_list', JSON.stringify(nextUsers));
 
-    confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
-    setDeptActionBanner(
-      `Tài khoản Chính CLB đã khởi tạo thành công tài khoản danh dự cho "${newFormerBcn.name}" (${newFormerBcn.position}) — Có quyền xem & bình luận góp ý!`
-    );
-    setIsCreateFormerBcnOpen(false);
-    setFormerName('');
-    setFormerStudentId('');
-    setFormerEmail('');
-    setTimeout(() => setDeptActionBanner(null), 6000);
+      // Lưu trực tiếp vào Firestore qua cả registerUserToCloud lẫn pushCloudSync('userList')
+      await registerUserToCloud(newFormerBcn);
+      await pushCloudSync('userList', nextUsers);
+
+      confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+      setDeptActionBanner(
+        `Đã lưu vĩnh viễn tài khoản Cựu Chủ Nhiệm "${newFormerBcn.name}" (Tên đăng nhập: ${newFormerBcn.studentId} | Mật khẩu: ${newFormerBcn.password}) — Có quyền xem & bình luận góp ý!`
+      );
+      setIsCreateFormerBcnOpen(false);
+      setFormerName('');
+      setFormerStudentId('');
+      setFormerEmail('');
+      setTimeout(() => setDeptActionBanner(null), 8000);
+    } finally {
+      setIsCreatingAccount(false);
+    }
   };
 
   const handleInitiateDeleteMember = (member: UserProfile) => {
@@ -431,7 +453,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
     if (!editingDept || !onAppointSubDeptLeaders) return;
     setDeptModalError(null);
 
-    const viceIds = [chosenVice1Id, chosenVice2Id].filter(Boolean);
+    const viceIds = [chosenVice1Id].filter(Boolean);
     const uniqueVices = Array.from(new Set(viceIds));
     if (chosenLeaderId && uniqueVices.includes(chosenLeaderId)) {
       setDeptModalError('Trong cùng 1 ban, Trưởng nhóm và Phó nhóm phải là hai người khác nhau!');
@@ -586,7 +608,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
         </div>
       )}
 
-      {/* KHU VỰC TÀI KHOẢN GIÁM SÁT HỘI SINH VIÊN TRƯỜNG (NẾU ĐÃ ĐƯỢC TẠO) */}
+      {/* KHU VỰC TÀI KHOẢN GIÁM SÁT HỘI SINH VIÊN TRƯỜNG */}
       {hsvSupervisorAccounts.length > 0 && (
         <div className="rounded-3xl p-5 sm:p-6 border-3 border-[#382215] bg-[#EAF2EF] shadow-[5px_5px_0px_#382215] space-y-3">
           <div className="flex items-center gap-2 text-xs font-black uppercase text-[#245351]">
@@ -1046,7 +1068,7 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                   required
                   value={hsvUsername}
                   onChange={(e) => setHsvUsername(e.target.value)}
-                  placeholder="Ví dụ: HSV-AGU-2026"
+                  placeholder="Ví dụ: HSVAGU"
                   className="w-full px-3 py-2 rounded-xl border-2 border-[#382215]/30 bg-white font-mono font-bold"
                 />
               </div>
@@ -1073,9 +1095,10 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#C8532B] text-white font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer"
+                  disabled={isCreatingAccount}
+                  className="px-5 py-2 rounded-xl bg-[#C8532B] text-white font-black border-2 border-[#382215] shadow-[2px_2px_0px_#382215] cursor-pointer disabled:opacity-50"
                 >
-                  Khởi Tạo Tài Khoản Giám Sát
+                  {isCreatingAccount ? 'Đang Lưu...' : 'Khởi Tạo Tài Khoản Giám Sát'}
                 </button>
               </div>
             </form>
@@ -1191,9 +1214,10 @@ export const OrgChartSection: React.FC<OrgChartSectionProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#245351] text-[#FFE29A] font-black border-2 border-[#382215] cursor-pointer"
+                  disabled={isCreatingAccount}
+                  className="px-5 py-2 rounded-xl bg-[#245351] text-[#FFE29A] font-black border-2 border-[#382215] cursor-pointer disabled:opacity-50"
                 >
-                  Khởi Tạo Tài Khoản Danh Dự
+                  {isCreatingAccount ? 'Đang Lưu...' : 'Khởi Tạo Tài Khoản Danh Dự'}
                 </button>
               </div>
             </form>
